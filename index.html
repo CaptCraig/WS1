@@ -170,7 +170,7 @@ function App() {
     if (key==="Enter") {
       if (finder.letters.length<3){ setFinderShaking(true); setTimeout(()=>setFinderShaking(false),500); return; }
       const letters=finder.letters.toLowerCase().split("");
-      finder.results=ANSWERS.filter(w=>letters.every(l=>w.includes(l))).sort();
+      finder.results=VALID_GUESSES.filter(w=>letters.every(l=>w.includes(l))).sort();
       rerender(); return;
     }
     if (key==="Backspace"){ finder.letters=finder.letters.slice(0,-1); rerender(); return; }
