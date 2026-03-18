@@ -96,19 +96,26 @@ function filterWords(list, guesses, answer) {
 
 const state = {
   answer:"", guesses:[], current:"",
-  gameOver:false, showNewGame:false, usedWords:new Set()
+  gameOver:false, showNewGame:false, usedWords:new Set(),
+  mode:"solitaire", myWord:""
 };
 function initGame() {
-  const unused = ANSWERS.filter(w => !state.usedWords.has(w));
-  const pool = unused.length > 0 ? unused : ANSWERS;
-  state.answer = pool[Math.floor(Math.random()*pool.length)];
-  state.usedWords.add(state.answer);
+  if (state.mode==="myword") {
+    state.answer = state.myWord;
+  } else {
+    const unused = ANSWERS.filter(w => !state.usedWords.has(w));
+    const pool = unused.length > 0 ? unused : ANSWERS;
+    state.answer = pool[Math.floor(Math.random()*pool.length)];
+    state.usedWords.add(state.answer);
+  }
   state.guesses=[]; state.current="";
   state.gameOver=false; state.showNewGame=false;
 }
 initGame();
 
 const finder = { open:false, letters:"", results:[] };
+const modeSelector = { open:false };
+const myWordEntry = { open:false, letters:"" };
 
 const { useState, useEffect, useCallback } = React;
 
@@ -133,6 +140,10 @@ function App() {
       if (state.current.length!==5){
         setShaking(true); setTimeout(()=>setShaking(false),500);
         showMsg("Not enough letters"); return;
+      }
+      if (!ANSWERS.includes(state.current)){
+        setShaking(true); setTimeout(()=>setShaking(false),500);
+        showMsg("Not in word list"); return;
       }
       const rowIdx=state.guesses.length, word=state.current;
       state.guesses=[...state.guesses,word]; state.current="";
@@ -185,11 +196,39 @@ function App() {
   const handleGameBtn=useCallback((key)=>processGameKey(key==="⌫"?"Backspace":key),[processGameKey]);
   const handleFinderBtn=useCallback((key)=>processFinderKey(key==="⌫"?"Backspace":key),[processFinderKey]);
 
+  // Mode selector
+  const openModeSelector=useCallback(()=>{ modeSelector.open=true; rerender(); },[rerender]);
+  const closeModeSelector=useCallback(()=>{ modeSelector.open=false; rerender(); },[rerender]);
+
+  // My Word entry
+  const openMyWordEntry=useCallback(()=>{ myWordEntry.open=true; myWordEntry.letters=state.myWord||""; rerender(); },[rerender]);
+  const closeMyWordEntry=useCallback(()=>{ myWordEntry.open=false; rerender(); },[rerender]);
+
+  const processMyWordKey=useCallback((key)=>{
+    if (key==="Enter") {
+      if (myWordEntry.letters.length!==5) return;
+      state.myWord=myWordEntry.letters.toLowerCase();
+      state.mode="myword";
+      myWordEntry.open=false;
+      modeSelector.open=false;
+      initGame(); setFlipping({}); rerender(); return;
+    }
+    if (key==="Backspace"){ myWordEntry.letters=myWordEntry.letters.slice(0,-1); rerender(); return; }
+    if (/^[a-zA-Z]$/i.test(key)&&myWordEntry.letters.length<5){ myWordEntry.letters+=key.toLowerCase(); rerender(); }
+  },[rerender]);
+  const handleMyWordBtn=useCallback((key)=>processMyWordKey(key==="⌫"?"Backspace":key),[processMyWordKey]);
+
   const { answer, guesses, current, gameOver, showNewGame } = state;
   const remaining = filterWords(ANSWERS, guesses, answer);
   const letterStates = computeLetterStates(guesses, answer);
   const isWide = k => k==="Enter"||k==="⌫";
   const searchLetters = finder.letters.toLowerCase().split("").filter(Boolean);
+
+  // Responsive key sizing
+  const keyW = Math.min(40, Math.max(30, Math.floor(window.innerWidth / 11.5)));
+  const keyH = Math.min(56, Math.max(42, Math.floor(keyW * 1.4)));
+  const keyGap = Math.max(4, Math.floor(keyW * 0.12));
+  const keyFontSize = Math.max(11, Math.floor(keyW * 0.35));
 
   const S = {
     app:    {display:"flex",flexDirection:"column",alignItems:"center",minHeight:"100vh",background:"#121213",color:"#fff",fontFamily:"'Montserrat',sans-serif",paddingBottom:24},
@@ -197,8 +236,8 @@ function App() {
     toast:  {position:"fixed",top:70,left:"50%",transform:"translateX(-50%)",background:"#fff",color:"#121213",padding:"10px 20px",borderRadius:6,fontWeight:700,fontSize:15,zIndex:200,boxShadow:"0 2px 12px rgba(0,0,0,0.5)"},
     overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:150,display:"flex",alignItems:"center",justifyContent:"center",padding:20},
     modal:  {background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:12,padding:24,width:"100%",maxWidth:480,maxHeight:"80vh",display:"flex",flexDirection:"column",animation:"fadeIn 0.2s ease"},
-    layout: {display:"flex",gap:20,alignItems:"flex-start",width:"100%",maxWidth:900,padding:"0 12px",flexWrap:"wrap",justifyContent:"center"},
-    panel:  {flex:1,minWidth:180,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:8,padding:16,marginTop:4,display:"flex",flexDirection:"column",maxHeight:520},
+    layout: {display:"flex",flexDirection:"column",gap:12,alignItems:"center",width:"100%",maxWidth:900,padding:"0 8px"},
+    panel:  {width:"100%",maxWidth:500,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:8,padding:12,display:"flex",flexDirection:"column",maxHeight:160},
     footer: {marginTop:12,color:"#565758",fontSize:11},
   };
 
@@ -208,7 +247,7 @@ function App() {
 
     // Header
     React.createElement("div",{style:S.header},
-      React.createElement("span",{style:{fontSize:22,fontWeight:800,letterSpacing:4,flex:1,textAlign:"center"}},"WORDLE SOLITAIRE"),
+      React.createElement("span",{style:{fontSize:22,fontWeight:800,letterSpacing:4,flex:1,textAlign:"center"}},state.mode==="myword"?"WORDLE MY WORD":"WORDLE SOLITAIRE"),
       React.createElement("button",{
         onMouseDown:(e)=>{e.preventDefault();openFinder();},
         onTouchEnd:(e)=>{e.preventDefault();openFinder();},
@@ -218,6 +257,79 @@ function App() {
 
     // Toast
     message&&React.createElement("div",{style:S.toast},message),
+
+    // Mode Selector overlay
+    modeSelector.open&&React.createElement("div",{
+      style:S.overlay,
+      onMouseDown:(e)=>{if(e.target===e.currentTarget)closeModeSelector();},
+      onTouchEnd:(e)=>{if(e.target===e.currentTarget){e.preventDefault();closeModeSelector();}}
+    },
+      React.createElement("div",{style:{...S.modal,maxWidth:360}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}},
+          React.createElement("span",{style:{fontWeight:800,fontSize:16,letterSpacing:2,textTransform:"uppercase"}},"Choose Mode"),
+          React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();closeModeSelector();},
+            onTouchEnd:(e)=>{e.preventDefault();closeModeSelector();},
+            style:{...btnBase,background:"#3a3a3c",color:"#fff",borderRadius:4,width:32,height:32,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}
+          },"×")
+        ),
+        React.createElement("button",{
+          onMouseDown:(e)=>{e.preventDefault();state.mode="solitaire";modeSelector.open=false;initGame();setFlipping({});rerender();},
+          onTouchEnd:(e)=>{e.preventDefault();state.mode="solitaire";modeSelector.open=false;initGame();setFlipping({});rerender();},
+          style:{...btnBase,width:"100%",padding:"16px",background:state.mode==="solitaire"?"#538d4e":"#2a2a2b",color:"#fff",borderRadius:8,fontSize:15,letterSpacing:2,textTransform:"uppercase",marginBottom:12,border:state.mode==="solitaire"?"2px solid #538d4e":"2px solid #3a3a3c"}
+        },"Wordle Solitaire"),
+        React.createElement("button",{
+          onMouseDown:(e)=>{e.preventDefault();closeModeSelector();openMyWordEntry();},
+          onTouchEnd:(e)=>{e.preventDefault();closeModeSelector();openMyWordEntry();},
+          style:{...btnBase,width:"100%",padding:"16px",background:state.mode==="myword"?"#b59f3b":"#2a2a2b",color:"#fff",borderRadius:8,fontSize:15,letterSpacing:2,textTransform:"uppercase",border:state.mode==="myword"?"2px solid #b59f3b":"2px solid #3a3a3c"}
+        },"Wordle My Word")
+      )
+    ),
+
+    // My Word Entry overlay
+    myWordEntry.open&&React.createElement("div",{
+      style:S.overlay,
+      onMouseDown:(e)=>{if(e.target===e.currentTarget)closeMyWordEntry();},
+      onTouchEnd:(e)=>{if(e.target===e.currentTarget){e.preventDefault();closeMyWordEntry();}}
+    },
+      React.createElement("div",{style:S.modal},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}},
+          React.createElement("span",{style:{fontWeight:800,fontSize:16,letterSpacing:2,textTransform:"uppercase"}},"My Word"),
+          React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();closeMyWordEntry();},
+            onTouchEnd:(e)=>{e.preventDefault();closeMyWordEntry();},
+            style:{...btnBase,background:"#3a3a3c",color:"#fff",borderRadius:4,width:32,height:32,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}
+          },"×")
+        ),
+        React.createElement("div",{style:{fontSize:12,color:"#818384",marginBottom:14,letterSpacing:0.5}},
+          "Enter any 5 characters — this becomes the secret word."
+        ),
+        React.createElement("div",{style:{display:"flex",gap:8,justifyContent:"center",marginBottom:16}},
+          ...Array.from({length:5}).map((_,i)=>{
+            const letter=myWordEntry.letters[i]||"";
+            const isActive=i===myWordEntry.letters.length&&myWordEntry.letters.length<5;
+            return React.createElement("div",{key:i,style:{width:56,height:56,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${letter?"#b59f3b":isActive?"#818384":"#3a3a3c"}`,borderRadius:4,fontSize:24,fontWeight:800,textTransform:"uppercase",color:"#fff",background:"#121213",boxShadow:isActive?"0 0 0 1px #818384":"none",transition:"border-color 0.15s"}},letter.toUpperCase());
+          })
+        ),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:6,alignItems:"center",marginBottom:16}},
+          ...KEYBOARD_ROWS.map((row,ri)=>
+            React.createElement("div",{key:ri,style:{display:"flex",gap:5}},
+              ...row.map(key=>{
+                const wide=isWide(key);
+                const bg=key==="Enter"?"#b59f3b":key==="⌫"?"#3a3a3c":"#818384";
+                return React.createElement("button",{
+                  key,
+                  onMouseDown:(e)=>{e.preventDefault();handleMyWordBtn(key);},
+                  onTouchEnd:(e)=>{e.preventDefault();handleMyWordBtn(key);},
+                  style:{...btnBase,height:44,width:wide?54:34,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:wide?10:13,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none"}
+                },key);
+              })
+            )
+          )
+        ),
+        myWordEntry.letters.length===5&&React.createElement("div",{style:{textAlign:"center",color:"#818384",fontSize:12,fontStyle:"italic"}},"Press Enter to start playing")
+      )
+    ),
 
     // Finder overlay
     finder.open&&React.createElement("div",{
@@ -287,10 +399,9 @@ function App() {
 
     // Main layout
     React.createElement("div",{style:S.layout},
-      React.createElement("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",flex:"0 0 auto"}},
 
-        // Grid
-        React.createElement("div",{style:{display:"grid",gridTemplateRows:"repeat(6,1fr)",gap:6,marginBottom:20}},
+      // Grid
+      React.createElement("div",{style:{display:"grid",gridTemplateRows:"repeat(6,1fr)",gap:6,marginBottom:12}},
           ...Array.from({length:6}).map((_,rowIdx)=>{
             const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
             return React.createElement("div",{key:rowIdx,className:isCurrent&&shaking?"row-shake":"",style:{display:"flex",gap:6}},
@@ -308,49 +419,55 @@ function App() {
           })
         ),
 
-        // Game keyboard
-        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8,alignItems:"center",marginBottom:16}},
-          ...KEYBOARD_ROWS.map((row,ri)=>
-            React.createElement("div",{key:ri,style:{display:"flex",gap:6}},
-              ...row.map(key=>{
-                const s=letterStates[key];
-                const bg=s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
-                return React.createElement("button",{
-                  key,
-                  onMouseDown:(e)=>{e.preventDefault();handleGameBtn(key);},
-                  onTouchEnd:(e)=>{e.preventDefault();handleGameBtn(key);},
-                  style:{...btnBase,height:56,width:isWide(key)?62:40,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:isWide(key)?11:14,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
-                },key);
-              })
-            )
-          )
-        ),
-
-        showNewGame&&React.createElement("button",{
-          onMouseDown:(e)=>{e.preventDefault();initGame();setFlipping({});rerender();},
-          onTouchEnd:(e)=>{e.preventDefault();initGame();setFlipping({});rerender();},
-          style:{...btnBase,marginTop:4,padding:"12px 32px",background:"#538d4e",color:"#fff",borderRadius:6,fontSize:15,letterSpacing:2,textTransform:"uppercase",boxShadow:"0 2px 12px rgba(83,141,78,0.4)"}
-        },"New Game")
-      ),
-
-      // Possible words panel
+      // Possible words panel — between grid and keyboard
       React.createElement("div",{style:S.panel},
-        React.createElement("div",{style:{fontWeight:700,fontSize:13,letterSpacing:2,color:"#818384",marginBottom:10,textTransform:"uppercase",flexShrink:0}},
+        React.createElement("div",{style:{fontWeight:700,fontSize:12,letterSpacing:2,color:"#818384",marginBottom:6,textTransform:"uppercase",flexShrink:0,display:"flex",alignItems:"center"}},
           "Possible Words",
-          React.createElement("span",{style:{marginLeft:8,background:"#3a3a3c",padding:"2px 8px",borderRadius:12,fontSize:12,color:"#fff"}},remaining.length)
+          React.createElement("span",{style:{marginLeft:8,background:"#3a3a3c",padding:"2px 8px",borderRadius:12,fontSize:11,color:"#fff"}},remaining.length)
         ),
         guesses.length===0
-          ?React.createElement("div",{style:{color:"#565758",fontSize:13,fontStyle:"italic"}},"Make your first guess to see remaining possibilities...")
+          ?React.createElement("div",{style:{color:"#565758",fontSize:12,fontStyle:"italic"}},"Make your first guess to see remaining possibilities...")
           :remaining.length>200
-            ?React.createElement("div",{style:{color:"#818384",fontSize:14}},
-                React.createElement("div",{style:{fontSize:32,fontWeight:800,color:"#538d4e"}},remaining.length),
-                React.createElement("div",{style:{marginTop:4}},"words still possible")
+            ?React.createElement("div",{style:{color:"#818384",fontSize:13,display:"flex",alignItems:"center",gap:8}},
+                React.createElement("span",{style:{fontSize:26,fontWeight:800,color:"#538d4e"}},remaining.length),
+                React.createElement("span",{},"words still possible")
               )
-            :React.createElement("div",{style:{overflowY:"auto",flex:1,display:"flex",flexWrap:"wrap",gap:"4px 8px",alignContent:"flex-start"}},
+            :React.createElement("div",{style:{overflowY:"auto",flex:1,display:"flex",flexWrap:"wrap",gap:"3px 6px",alignContent:"flex-start"}},
                 ...remaining.sort().map(word=>
-                  React.createElement("span",{key:word,style:{fontFamily:"'Courier New',monospace",fontSize:13,color:"#e0e0e0",padding:"2px 6px",background:"#2a2a2b",borderRadius:4,letterSpacing:1}},word)
+                  React.createElement("span",{key:word,style:{fontFamily:"'Courier New',monospace",fontSize:12,color:"#e0e0e0",padding:"2px 5px",background:"#2a2a2b",borderRadius:4,letterSpacing:1}},word)
                 )
               )
+      ),
+
+      // Game keyboard
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",marginBottom:12}},
+        ...KEYBOARD_ROWS.map((row,ri)=>
+          React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
+            ...row.map(key=>{
+              const s=letterStates[key];
+              const bg=s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
+              return React.createElement("button",{
+                key,
+                onMouseDown:(e)=>{e.preventDefault();handleGameBtn(key);},
+                onTouchEnd:(e)=>{e.preventDefault();handleGameBtn(key);},
+                style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.6):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:isWide(key)?Math.max(9,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
+              },key);
+            })
+          )
+        )
+      ),
+
+      showNewGame&&React.createElement("div",{style:{display:"flex",gap:12,marginTop:4}},
+        React.createElement("button",{
+          onMouseDown:(e)=>{e.preventDefault();initGame();setFlipping({});rerender();},
+          onTouchEnd:(e)=>{e.preventDefault();initGame();setFlipping({});rerender();},
+          style:{...btnBase,padding:"12px 28px",background:"#538d4e",color:"#fff",borderRadius:6,fontSize:15,letterSpacing:2,textTransform:"uppercase",boxShadow:"0 2px 12px rgba(83,141,78,0.4)"}
+        },"Restart"),
+        React.createElement("button",{
+          onMouseDown:(e)=>{e.preventDefault();openModeSelector();},
+          onTouchEnd:(e)=>{e.preventDefault();openModeSelector();},
+          style:{...btnBase,padding:"12px 28px",background:"#378ADD",color:"#fff",borderRadius:6,fontSize:15,letterSpacing:2,textTransform:"uppercase",boxShadow:"0 2px 12px rgba(55,138,221,0.4)"}
+        },"New")
       )
     ),
 
