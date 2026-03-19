@@ -478,8 +478,8 @@ function App() {
       )
     ),
 
-    // Scrollable log — fills remaining space between top row and keyboard
-    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",margin:"0 8px",background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
+    // Scrollable log — fills remaining space, padded so content clears fixed keyboard
+    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",margin:"0 8px",marginBottom:kbH+8,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
       log.map((line,i)=>{
         if (line && line.type==="tiles") {
           return React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",gap:2,marginBottom:1}},
@@ -512,8 +512,8 @@ function App() {
       })
     ),
 
-    // Keyboard — pinned to bottom, flexShrink:0
-    React.createElement("div",{style:{flexShrink:0,overflow:"hidden",display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"6px 4px 8px 4px",background:"#121213"}},
+    // Keyboard — position fixed to bottom of viewport, always visible
+    React.createElement("div",{style:{position:"fixed",bottom:0,left:0,right:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"4px 4px calc(4px + env(safe-area-inset-bottom,0px)) 4px",background:"#121213",zIndex:100}},
       ...KEYBOARD_ROWS.map((row,ri)=>
         React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
           ...row.map(key=>{
