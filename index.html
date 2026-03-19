@@ -130,10 +130,41 @@ function App() {
   const [shaking, setShaking] = useState(false);
   const [flipping, setFlipping] = useState({});
   const [devMode, setDevMode] = useState(false);
+  const [screenSize, setScreenSize] = useState({w:window.innerWidth,h:window.innerHeight});
+
+  useEffect(()=>{
+    const onResize=()=>setScreenSize({w:window.innerWidth,h:window.innerHeight});
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
   const [kbMode, setKbMode] = useState("guess"); // "guess" | "find" | "myword"
   const [log, setLog] = useState(["─── New Game ───", "Possible words: "+ANSWERS.length]);
   const devBuffer = useRef("");
   const logRef = useRef(null);
+
+  // Pack words into lines based on actual log container width
+  const packWords = (words) => {
+    const containerWidth = logRef.current ? logRef.current.clientWidth - 24 : window.innerWidth - 40;
+    // Courier New at font-size 11px: ~6.6px per char, plus ", " separator = ~2 chars
+    const charWidth = 6.6;
+    const sepWidth = 2 * charWidth; // ", "
+    const lines = [];
+    let line = "  ";
+    let lineW = 0;
+    words.forEach((word, i) => {
+      const wordW = (word.length + (i < words.length-1 ? 2 : 0)) * charWidth;
+      if (lineW > 0 && lineW + wordW > containerWidth) {
+        lines.push(line.trimEnd());
+        line = "  " + word + (i < words.length-1 ? ", " : "");
+        lineW = wordW;
+      } else {
+        line += word + (i < words.length-1 ? ", " : "");
+        lineW += wordW;
+      }
+    });
+    if (line.trim()) lines.push(line.trimEnd());
+    return lines;
+  };
 
   const addLog = useCallback((lines)=>{
     setLog(prev=>{
@@ -192,14 +223,9 @@ function App() {
       updateLastLog("Guess: "+tileRow(word,state.answer)+" → "+(isWin?"✓":remaining.length+" remaining"));
       rerender();
 
-      // Show remaining words packed into lines
+      // Show remaining words packed into lines dynamically
       if (!isWin && !isLast && remaining.length>0 && remaining.length<=200) {
-        const wordsPerLine = Math.floor((window.innerWidth < 600 ? 36 : 60) / 6);
-        const lines = [];
-        for (let i=0; i<remaining.length; i+=wordsPerLine) {
-          lines.push("  "+remaining.slice(i,i+wordsPerLine).join(", "));
-        }
-        addLog(lines);
+        addLog(packWords(remaining));
       }
 
       if (isWin||isLast) {
@@ -240,7 +266,7 @@ function App() {
       const letters=findRef.current.split("");
       const results=VALID_GUESSES.filter(w=>letters.every(l=>w.includes(l))).sort();
       const summary = results.length>0
-        ? ["Find: "+findRef.current.toUpperCase()+" → "+results.length+" words found", "  "+results.join(", ")]
+        ? ["Find: "+findRef.current.toUpperCase()+" → "+results.length+" words found", ...packWords(results)]
         : ["Find: "+findRef.current.toUpperCase()+" → no words found"];
       addLog(summary);
       findRef.current="";
@@ -314,165 +340,157 @@ function App() {
 
   const { answer, guesses, current, gameOver, showNewGame } = state;
   const letterStates = computeLetterStates(guesses, answer);
+  // Responsive sizing — breakpoint 1400px
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
   const isWide = k => k==="Enter"||k==="⌫";
 
-  // Responsive sizing
-  const vw = window.innerWidth;
-  const isLarge = vw >= 600;
-  const tileSize = isLarge ? 52 : Math.max(36, Math.floor(vw / 7.5));
-  const tileFontSize = isLarge ? 20 : Math.max(14, Math.floor(tileSize*0.4));
-  const keyW = isLarge ? 40 : Math.min(40, Math.max(28, Math.floor(vw / 11.5)));
-  const keyH = Math.min(56, Math.max(40, Math.floor(keyW * 1.4)));
-  const keyGap = Math.max(4, Math.floor(keyW * 0.12));
-  const keyFontSize = Math.max(10, Math.floor(keyW * 0.35));
+  // Tile: 70% of previous size, scale with vw below 1400
+  const tileSize = Math.max(22, Math.floor(Math.min(36, vw/11) * 0.70));
+  const tileFontSize = Math.max(10, Math.floor(tileSize * 0.42));
+  const tileGap = 4;
 
-  const S = {
-    app:    {display:"flex",flexDirection:"column",alignItems:"center",minHeight:"100vh",background:"#121213",color:"#fff",fontFamily:"'Montserrat',sans-serif",paddingBottom:16},
-    header: {width:"100%",maxWidth:960,borderBottom:"1px solid #3a3a3c",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 16px",marginBottom:8},
-    mainArea: {display:"flex",flexDirection:isLarge?"row":"column",gap:12,alignItems:isLarge?"flex-start":"center",width:"100%",maxWidth:960,padding:"0 8px",justifyContent:"center"},
-    gridCol: {display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0},
-    logCol:  {flex:isLarge?1:undefined,width:isLarge?undefined:"100%",maxWidth:isLarge?undefined:500},
-    log:     {background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:8,padding:"10px 12px",height:isLarge?`${6*(tileSize+6)+20}px`:"160px",overflowY:"auto",fontFamily:"'Courier New',monospace",fontSize:12,color:"#e0e0e0",lineHeight:1.6},
-    kbArea:  {display:"flex",flexDirection:"column",alignItems:"center",width:"100%",maxWidth:960,padding:"0 8px",marginTop:8},
-    kbMode:  {fontSize:11,color:"#818384",letterSpacing:1,textTransform:"uppercase",marginBottom:4,alignSelf:"flex-start",paddingLeft:4},
-    fnBtns:  {display:"flex",gap:8,marginBottom:8,flexWrap:"wrap",justifyContent:"center"},
-  };
+  // Grid block total height
+  const gridH = 6 * (tileSize + tileGap) + tileGap;
+  const gridW = 5 * (tileSize + tileGap) + tileGap;
+
+  // Keyboard sizing — scale with vw
+  const keyW = Math.min(38, Math.max(26, Math.floor(vw / 12)));
+  const keyH = Math.min(48, Math.max(34, Math.floor(keyW * 1.3)));
+  const keyGap = Math.max(3, Math.floor(keyW * 0.10));
+  const keyFontSize = Math.max(9, Math.floor(keyW * 0.32));
+  const kbH = 3 * (keyH + keyGap) + keyGap + 8; // approx keyboard block height
+
+  // Misc panel width
+  const miscW = Math.max(100, Math.floor(vw * 0.22));
 
   const btnBase = {border:"none",cursor:"pointer",fontFamily:"'Montserrat',sans-serif",fontWeight:700,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"};
-  const fnBtn = (bg)=>({...btnBase,background:bg,color:"#fff",borderRadius:6,padding:"7px 14px",fontSize:11,letterSpacing:1,textTransform:"uppercase"});
+  const fnBtn = (bg,active)=>({...btnBase,background:bg,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:10,letterSpacing:1,textTransform:"uppercase",opacity:active?1:0.7,boxShadow:active?"0 0 0 2px #fff2":"none"});
 
-  const startFind = ()=>{ 
-    findRef.current=""; 
-    setKbMode("find"); 
-    addLog("Find: "); 
-  };
-  const startMyWord = ()=>{ 
-    myWordRef.current=""; 
-    setKbMode("myword"); 
-    addLog("My Word: "); 
-  };
-  const startSolitaire = ()=>{
-    state.mode="solitaire";
-    initGame(); setFlipping({});
-    setKbMode("guess");
-    addLog(["─── Wordle Solitaire ───","Possible words: "+ANSWERS.length,"Guess: "]);
-    rerender();
-  };
+  const startFind = ()=>{ findRef.current=""; setKbMode("find"); addLog("Find: "); };
+  const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
+  const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Possible words: "+ANSWERS.length,"Guess: "]); rerender(); };
+  const doRestart = ()=>{ initGame(); setFlipping({}); addLog(["─── Restart ───","Possible words: "+ANSWERS.length,"Guess: "]); rerender(); };
+  const doClear = ()=>{ setLog(["─── Log Cleared ───","Guess: "]); };
 
-  const kbModeLabel = kbMode==="find"?"Keyboard: Find a Word":kbMode==="myword"?"Keyboard: Enter My Word":"Keyboard: Guess";
+  // Layout: full viewport flex column, keyboard pinned to bottom
+  return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden",background:"#121213",color:"#fff",fontFamily:"'Montserrat',sans-serif"}},
 
-  return React.createElement("div",{style:S.app},
-
-    // Header
-    React.createElement("div",{style:S.header},
-      React.createElement("span",{style:{fontSize:20,fontWeight:800,letterSpacing:3,flex:1,textAlign:"center"}},
+    // Header — half padding
+    React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
+      React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
         state.mode==="myword"?"WORDLE MY WORD":"WORDLE SOLITAIRE",
-        devMode&&React.createElement("span",{style:{fontSize:10,color:"#b59f3b",marginLeft:8,letterSpacing:1}},"DEV")
+        devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
 
-    // Main area: grid + log
-    React.createElement("div",{style:S.mainArea},
+    // Top row: grid + misc panel
+    React.createElement("div",{style:{display:"flex",flexDirection:"row",gap:0,padding:"6px 0 4px 0",flexShrink:0,alignItems:"flex-start",width:"100%"}},
 
-      // Grid column
-      React.createElement("div",{style:S.gridCol},
-        React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,1fr)`,gap:6,marginBottom:8}},
-          ...Array.from({length:6}).map((_,rowIdx)=>{
-            const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
-            return React.createElement("div",{key:rowIdx,className:isCurrent&&shaking?"row-shake":"",style:{display:"flex",gap:6}},
-              ...Array.from({length:5}).map((_,colIdx)=>{
-                const isRevealed=guess!==undefined;
-                const letter=isRevealed?guess[colIdx]:(isCurrent?current[colIdx]||"":"");
-                const bg=isRevealed?COLORS[getTileColor(guess,answer,colIdx)]:COLORS.empty;
-                const border=isRevealed?bg:(letter?COLORS.borderFilled:COLORS.border);
-                const delay=isRevealed?colIdx*0.3:0;
-                const flipKey=rowIdx+"_"+(guess||"");
-                const anim=isRevealed&&flipping[flipKey]?`flip 0.5s ease ${delay}s forwards`:"none";
-                return React.createElement("div",{key:colIdx,style:{width:tileSize,height:tileSize,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${border}`,backgroundColor:bg,color:"#fff",fontFamily:"'Montserrat',sans-serif",fontWeight:800,fontSize:tileFontSize,textTransform:"uppercase",borderRadius:4,transition:`background-color 0.1s ${delay}s,border-color 0.1s ${delay}s`,animation:anim,userSelect:"none"}},letter.toUpperCase());
-              })
-            );
-          })
+      // 6-row grid — centered in left half
+      React.createElement("div",{style:{width:"50%",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+        React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,${tileSize}px)`,gridTemplateColumns:`repeat(5,${tileSize}px)`,gap:tileGap}},
+        ...Array.from({length:6}).map((_,rowIdx)=>{
+          const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
+          return Array.from({length:5}).map((_,colIdx)=>{
+            const isRevealed=guess!==undefined;
+            const letter=isRevealed?guess[colIdx]:(isCurrent?current[colIdx]||"":"");
+            const bg=isRevealed?COLORS[getTileColor(guess,answer,colIdx)]:COLORS.empty;
+            const border=isRevealed?bg:(letter?COLORS.borderFilled:COLORS.border);
+            const delay=isRevealed?colIdx*0.3:0;
+            const flipKey=rowIdx+"_"+(guess||"");
+            const anim=isRevealed&&flipping[flipKey]?`flip 0.5s ease ${delay}s forwards`:"none";
+            const isShaking=isCurrent&&shaking;
+            return React.createElement("div",{key:`${rowIdx}-${colIdx}`,className:isShaking?"row-shake":"",style:{width:tileSize,height:tileSize,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${border}`,backgroundColor:bg,color:"#fff",fontWeight:800,fontSize:tileFontSize,textTransform:"uppercase",borderRadius:3,transition:`background-color 0.1s ${delay}s,border-color 0.1s ${delay}s`,animation:anim,userSelect:"none"}},letter.toUpperCase());
+          });
+        }).flat()
+        )
+      ),
+
+      // Misc panel — right half, full to screen edge
+      React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",height:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
+
+        // Mode indicator + screen size
+        React.createElement("div",{style:{fontSize:9,color:"#818384",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},
+          kbMode==="find"?"● Find":kbMode==="myword"?"● My Word":"● "+state.mode
+        ),
+        React.createElement("div",{style:{fontSize:11,color:"#e0e0e0",letterSpacing:0.5,marginBottom:2,fontWeight:700}},
+          screenSize.w+"×"+screenSize.h
         ),
 
-        // Restart / New buttons
-        showNewGame&&React.createElement("div",{style:{display:"flex",gap:10,marginBottom:8}},
+        // Spacer
+        React.createElement("div",{style:{flex:1}}),
+
+        // Restart/New — only when game over
+        showNewGame&&React.createElement("div",{style:{display:"flex",gap:4,marginBottom:4}},
           React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();initGame();setFlipping({});addLog(["─── Restart ───","Possible words: "+ANSWERS.length,"Guess: "]);rerender();},
-            onTouchEnd:(e)=>{e.preventDefault();initGame();setFlipping({});addLog(["─── Restart ───","Possible words: "+ANSWERS.length,"Guess: "]);rerender();},
-            style:{...btnBase,padding:"10px 22px",background:"#538d4e",color:"#fff",borderRadius:6,fontSize:13,letterSpacing:2,textTransform:"uppercase"}
+            onMouseDown:(e)=>{e.preventDefault();doRestart();},
+            onTouchEnd:(e)=>{e.preventDefault();doRestart();},
+            style:{...btnBase,flex:1,padding:"5px 4px",background:"#538d4e",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
           },"Restart"),
           React.createElement("button",{
             onMouseDown:(e)=>{e.preventDefault();startSolitaire();},
             onTouchEnd:(e)=>{e.preventDefault();startSolitaire();},
-            style:{...btnBase,padding:"10px 22px",background:"#378ADD",color:"#fff",borderRadius:6,fontSize:13,letterSpacing:2,textTransform:"uppercase"}
+            style:{...btnBase,flex:1,padding:"5px 4px",background:"#378ADD",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
           },"New")
-        )
-      ),
+        ),
 
-      // Log column
-      React.createElement("div",{style:S.logCol},
-        React.createElement("div",{ref:logRef,style:S.log},
-          log.map((line,i)=>
-            React.createElement("div",{key:i,style:{
-              color: line.startsWith("─")?"#538d4e":
-                     line.startsWith("Find:")?"#378ADD":
-                     line.startsWith("My Word:")?"#b59f3b":
-                     line.startsWith("Guess:")?"#e0e0e0":
-                     line.startsWith("  ")?"#818384":"#565758",
-              fontWeight: line.startsWith("─")||line.startsWith("Guess: ")?"700":"400"
-            }},line)
-          )
+        // Function buttons at bottom of misc panel
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
+          React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();startSolitaire();},
+            onTouchEnd:(e)=>{e.preventDefault();startSolitaire();},
+            style:fnBtn(state.mode==="solitaire"&&kbMode==="guess"?"#538d4e":"#2a2a2b", state.mode==="solitaire"&&kbMode==="guess")
+          },"Solitaire"),
+          devMode&&React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();startMyWord();},
+            onTouchEnd:(e)=>{e.preventDefault();startMyWord();},
+            style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
+          },"My Word"),
+          React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();startFind();},
+            onTouchEnd:(e)=>{e.preventDefault();startFind();},
+            style:fnBtn(kbMode==="find"?"#378ADD":"#2a2a2b", kbMode==="find")
+          },"Find"),
+          React.createElement("button",{
+            onMouseDown:(e)=>{e.preventDefault();doClear();},
+            onTouchEnd:(e)=>{e.preventDefault();doClear();},
+            style:fnBtn("#2a2a2b", false)
+          },"Clear")
         )
       )
     ),
 
-    // Keyboard area
-    React.createElement("div",{style:S.kbArea},
+    // Scrollable log — fills remaining space between top row and keyboard
+    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",margin:"0 8px",background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
+      log.map((line,i)=>
+        React.createElement("div",{key:i,style:{
+          color: line.startsWith("─")?"#538d4e":
+                 line.startsWith("Find:")?"#378ADD":
+                 line.startsWith("My Word:")?"#b59f3b":
+                 line.startsWith("Guess:")?"#e0e0e0":
+                 line.startsWith("  ")?"#818384":"#565758",
+          fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400"
+        }},line)
+      )
+    ),
 
-      // KB mode label
-      React.createElement("div",{style:S.kbMode},kbModeLabel),
-
-      // Function buttons
-      React.createElement("div",{style:S.fnBtns},
-        React.createElement("button",{
-          onMouseDown:(e)=>{e.preventDefault();startSolitaire();},
-          onTouchEnd:(e)=>{e.preventDefault();startSolitaire();},
-          style:fnBtn(state.mode==="solitaire"&&kbMode==="guess"?"#538d4e":"#3a3a3c")
-        },"Solitaire"),
-        devMode&&React.createElement("button",{
-          onMouseDown:(e)=>{e.preventDefault();startMyWord();},
-          onTouchEnd:(e)=>{e.preventDefault();startMyWord();},
-          style:fnBtn(kbMode==="myword"?"#b59f3b":"#3a3a3c")
-        },"My Word"),
-        React.createElement("button",{
-          onMouseDown:(e)=>{e.preventDefault();startFind();},
-          onTouchEnd:(e)=>{e.preventDefault();startFind();},
-          style:fnBtn(kbMode==="find"?"#378ADD":"#3a3a3c")
-        },"Find"),
-        React.createElement("button",{
-          onMouseDown:(e)=>{e.preventDefault();setLog(["─── Log Cleared ───","Guess: "]);},
-          onTouchEnd:(e)=>{e.preventDefault();setLog(["─── Log Cleared ───","Guess: "]);},
-          style:fnBtn("#3a3a3c")
-        },"Clear")
-      ),
-
-      // Keyboard
-      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center"}},
-        ...KEYBOARD_ROWS.map((row,ri)=>
-          React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
-            ...row.map(key=>{
-              const s=letterStates[key];
-              const bg=kbMode!=="guess"?COLORS.key:
-                s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
-              const handler = kbMode==="find"?processFindKey:kbMode==="myword"?processMyWordKey:processGameKey;
-              return React.createElement("button",{
-                key,
-                onMouseDown:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
-                onTouchEnd:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
-                style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.6):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:isWide(key)?Math.max(9,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
-              },key);
-            })
-          )
+    // Keyboard — pinned to bottom, flexShrink:0
+    React.createElement("div",{style:{flexShrink:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"6px 4px 8px 4px",background:"#121213"}},
+      ...KEYBOARD_ROWS.map((row,ri)=>
+        React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
+          ...row.map(key=>{
+            const s=letterStates[key];
+            const bg=kbMode!=="guess"?COLORS.key:
+              s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
+            const handler=kbMode==="find"?processFindKey:kbMode==="myword"?processMyWordKey:processGameKey;
+            return React.createElement("button",{
+              key,
+              onMouseDown:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
+              onTouchEnd:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
+              style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.55):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:isWide(key)?Math.max(8,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
+            },key);
+          })
         )
       )
     )
