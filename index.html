@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Wordle Solitaire</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;800&display=swap" rel="stylesheet">
@@ -31,6 +31,8 @@
 
     .row-shake { animation: shake 0.5s ease; }
 
+    * { user-select: none; -webkit-user-select: none; }
+    * { user-select: none; -webkit-user-select: none; }
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #1a1a1b; }
     ::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 3px; }
@@ -345,14 +347,15 @@ function App() {
   const vh = window.innerHeight;
   const isWide = k => k==="Enter"||k==="⌫";
 
-  // Tile: 70% of previous size, scale with vw below 1400
-  const tileSize = Math.max(22, Math.floor(Math.min(36, vw/11) * 0.70));
-  const tileFontSize = Math.max(10, Math.floor(tileSize * 0.42));
+  // Tile: width fills 70% of left half, height stays compact
   const tileGap = 4;
+  const tileW = Math.max(22, Math.floor((vw * 0.50 * 0.70 - tileGap * 6) / 5));
+  const tileH = Math.max(22, Math.floor(Math.min(36, vw/11) * 0.70));
+  const tileFontSize = Math.max(10, Math.floor(tileH * 0.52));
 
   // Grid block total height
-  const gridH = 6 * (tileSize + tileGap) + tileGap;
-  const gridW = 5 * (tileSize + tileGap) + tileGap;
+  const gridH = 6 * (tileH + tileGap) + tileGap;
+  const gridW = 5 * (tileW + tileGap) + tileGap;
 
   // Keyboard sizing — scale with vw
   const keyW = Math.min(38, Math.max(26, Math.floor(vw / 12)));
@@ -389,7 +392,7 @@ function App() {
 
       // 6-row grid — centered in left half
       React.createElement("div",{style:{width:"50%",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
-        React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,${tileSize}px)`,gridTemplateColumns:`repeat(5,${tileSize}px)`,gap:tileGap}},
+        React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,${tileH}px)`,gridTemplateColumns:`repeat(5,${tileW}px)`,gap:tileGap}},
         ...Array.from({length:6}).map((_,rowIdx)=>{
           const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
           return Array.from({length:5}).map((_,colIdx)=>{
@@ -401,7 +404,7 @@ function App() {
             const flipKey=rowIdx+"_"+(guess||"");
             const anim=isRevealed&&flipping[flipKey]?`flip 0.5s ease ${delay}s forwards`:"none";
             const isShaking=isCurrent&&shaking;
-            return React.createElement("div",{key:`${rowIdx}-${colIdx}`,className:isShaking?"row-shake":"",style:{width:tileSize,height:tileSize,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${border}`,backgroundColor:bg,color:"#fff",fontWeight:800,fontSize:tileFontSize,textTransform:"uppercase",borderRadius:3,transition:`background-color 0.1s ${delay}s,border-color 0.1s ${delay}s`,animation:anim,userSelect:"none"}},letter.toUpperCase());
+            return React.createElement("div",{key:`${rowIdx}-${colIdx}`,className:isShaking?"row-shake":"",style:{width:tileW,height:tileH,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${border}`,backgroundColor:bg,color:"#fff",fontWeight:800,fontSize:tileFontSize,textTransform:"uppercase",borderRadius:3,transition:`background-color 0.1s ${delay}s,border-color 0.1s ${delay}s`,animation:anim,userSelect:"none"}},letter.toUpperCase());
           });
         }).flat()
         )
@@ -469,14 +472,14 @@ function App() {
                  line.startsWith("Find:")?"#378ADD":
                  line.startsWith("My Word:")?"#b59f3b":
                  line.startsWith("Guess:")?"#e0e0e0":
-                 line.startsWith("  ")?"#818384":"#565758",
+                 line.startsWith("  ")?"#d0d0d0":"#b8b8b8",
           fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400"
         }},line)
       )
     ),
 
     // Keyboard — pinned to bottom, flexShrink:0
-    React.createElement("div",{style:{flexShrink:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"6px 4px 8px 4px",background:"#121213"}},
+    React.createElement("div",{style:{flexShrink:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"6px 4px calc(8px + env(safe-area-inset-bottom)) 4px",background:"#121213"}},
       ...KEYBOARD_ROWS.map((row,ri)=>
         React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
           ...row.map(key=>{
