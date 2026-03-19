@@ -370,13 +370,19 @@ function App() {
   const gridW = 5 * (tileW + tileGap) + tileGap;
 
   // Keyboard sizing — scale with vw
-  // Keyboard: size to fit screen. Available height after header + grid + log minimum.
-  // Keep keys small enough that 3 rows fit comfortably.
-  const keyW = Math.min(38, Math.max(26, Math.floor(vw / 12)));
-  const keyFontSize = Math.max(14, Math.floor(keyW * 0.48));
-  const keyH = Math.max(keyFontSize + 10, Math.min(48, Math.floor(keyW * 1.3)));
+  // Keyboard sizing: derive from viewport, ensure all 3 rows always visible
+  const keyW = Math.min(36, Math.max(24, Math.floor(vw / 12)));
   const keyGap = Math.max(3, Math.floor(keyW * 0.10));
-  const kbH = 3 * (keyH + keyGap) + keyGap + 20;
+  // Available height for keyboard: viewport minus header(~32) minus top-row(gridH+12) minus log(min 60) minus padding
+  const headerH = 32;
+  const topRowH = gridH + 16;
+  const logMinH = 60;
+  const kbPadding = 20;
+  const availableForKb = vh - headerH - topRowH - logMinH - kbPadding;
+  const maxKeyH = Math.floor((availableForKb - 3 * keyGap) / 3);
+  const keyH = Math.min(maxKeyH, Math.max(28, Math.floor(keyW * 1.3)));
+  const keyFontSize = Math.min(Math.floor(keyH * 0.55), Math.max(11, Math.floor(keyW * 0.48)));
+  const kbH = 3 * (keyH + keyGap) + keyGap + kbPadding;
 
   // Misc panel width
   const miscW = Math.max(100, Math.floor(vw * 0.22));
@@ -525,7 +531,7 @@ function App() {
               key,
               onMouseDown:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
               onTouchEnd:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
-              style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.55):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:key==="⌫"?Math.max(18,Math.floor(keyW*0.64)):isWide(key)?Math.max(10,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
+              style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.55):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:key==="⌫"?Math.floor(keyH*0.55):isWide(key)?Math.max(10,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
             },key);
           })
         )
