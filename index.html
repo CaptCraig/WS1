@@ -11,12 +11,12 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; background: #121213; overflow: hidden; }
-    body { font-family: 'Montserrat', sans-serif; color: #fff; overflow: hidden; }
+    body { font-family: 'Montserrat', sans-serif; color: #fff; }
     #wordle-root {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      padding-top: env(safe-area-inset-top, 0px);
-      padding-bottom: env(safe-area-inset-bottom, 0px);
+      height: 100dvh;
+      height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -129,8 +129,8 @@ const myWordEntry = { open:false, letters:"" };
 
 const { useState, useEffect, useCallback, useRef } = React;
 
-const MAX_LOG_LINES = 40;
-const TILE_EMOJI = { correct:"🟩", present:"🟨", absent:"⬛" };
+const MAX_LOG_LINES = 314;
+const TILE_COLORS = { correct:"#538d4e", present:"#b59f3b", absent:"#3a3a3c" };
 const DEV_SEQUENCE = "vwxyz";
 
 function App() {
@@ -147,7 +147,7 @@ function App() {
     return()=>window.removeEventListener("resize",onResize);
   },[]);
   const [kbMode, setKbMode] = useState("guess"); // "guess" | "find" | "myword"
-  const [log, setLog] = useState(["─── New Game ───", "Possible words: "+ANSWERS.length]);
+  const [log, setLog] = useState(["─── New Game ───", "Guess: "]);
   const devBuffer = useRef("");
   const logRef = useRef(null);
 
@@ -199,14 +199,16 @@ function App() {
 
   // Tile row as emoji string
   const tileRow = useCallback((guess, answer)=>{
-    return guess.toUpperCase().split("").map((ch,i)=>TILE_EMOJI[getTileColor(guess,answer,i)]).join("")+" "+guess.toUpperCase();
+    // Returns a structured log entry: { type:"tiles", prefix:"Guess: ", tiles:[{letter,color}], suffix }
+    const tiles = guess.toUpperCase().split("").map((ch,i)=>({letter:ch, color:getTileColor(guess,answer,i)}));
+    return { type:"tiles", tiles };
   },[]);
 
   const processGameKey = useCallback((key)=>{
     if (state.gameOver) {
       if (key==="Enter"&&state.showNewGame){ 
         initGame(); setFlipping({}); 
-        addLog(["─── Restart ───","Possible words: "+ANSWERS.length]);
+        addLog(["─── Restart ───","Guess: "]);
         rerender(); 
       }
       return;
@@ -229,7 +231,10 @@ function App() {
       setFlipping(f=>({...f,[rowIdx+"_"+word]:true}));
       const remaining=filterWords(ANSWERS,state.guesses,state.answer);
       const isWin=word===state.answer, isLast=state.guesses.length>=6;
-      updateLastLog("Guess: "+tileRow(word,state.answer)+" → "+(isWin?"✓":remaining.length+" remaining"));
+      const tr = tileRow(word,state.answer);
+      tr.prefix = "Guess:  "+word.toUpperCase()+" → ";
+      tr.suffix = isWin?"✓":remaining.length+" remaining";
+      updateLastLog(tr);
       rerender();
 
       // Show remaining words packed into lines dynamically
@@ -243,7 +248,7 @@ function App() {
         setTimeout(()=>{
           state.showNewGame=true;
           const summary=["","─── Game Summary ───",
-            ...state.guesses.map(g=>tileRow(g,state.answer)),
+            ...state.guesses.map(g=>{ const tr=tileRow(g,state.answer); tr.prefix="  "; tr.suffix=""; return tr; }),
             isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`:`The word was ${state.answer.toUpperCase()}`,
             "─────────────────"
           ];
@@ -305,7 +310,7 @@ function App() {
       myWordRef.current="";
       setKbMode("guess");
       initGame(); setFlipping({});
-      addLog(["─── My Word Mode ───","Possible words: "+ANSWERS.length,"Guess: "]);
+      addLog(["─── My Word Mode ───","Guess: "]);
       rerender(); return;
     }
     if (key==="Backspace"){ 
@@ -368,7 +373,7 @@ function App() {
   const keyW = Math.min(38, Math.max(26, Math.floor(vw / 12)));
   const keyH = Math.min(48, Math.max(34, Math.floor(keyW * 1.3)));
   const keyGap = Math.max(3, Math.floor(keyW * 0.10));
-  const keyFontSize = Math.max(9, Math.floor(keyW * 0.32));
+  const keyFontSize = Math.max(14, Math.floor(keyW * 0.48));
   const kbH = 3 * (keyH + keyGap) + keyGap + 8; // approx keyboard block height
 
   // Misc panel width
@@ -379,8 +384,8 @@ function App() {
 
   const startFind = ()=>{ findRef.current=""; setKbMode("find"); addLog("Find: "); };
   const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
-  const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Possible words: "+ANSWERS.length,"Guess: "]); rerender(); };
-  const doRestart = ()=>{ initGame(); setFlipping({}); addLog(["─── Restart ───","Possible words: "+ANSWERS.length,"Guess: "]); rerender(); };
+  const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
+  const doRestart = ()=>{ initGame(); setFlipping({}); addLog(["─── Restart ───","Guess: "]); rerender(); };
   const doClear = ()=>{ setLog(["─── Log Cleared ───","Guess: "]); };
 
   // Layout: full viewport flex column, keyboard pinned to bottom
@@ -389,7 +394,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.008":"WORDLE SOLITAIRE v.008",
+        state.mode==="myword"?"WORDLE MY WORD v.009":"WORDLE SOLITAIRE v.009",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -473,16 +478,36 @@ function App() {
 
     // Scrollable log — fills remaining space between top row and keyboard
     React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",margin:"0 8px",background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
-      log.map((line,i)=>
-        React.createElement("div",{key:i,style:{
+      log.map((line,i)=>{
+        if (line && line.type==="tiles") {
+          return React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",gap:2,marginBottom:1}},
+            line.prefix&&React.createElement("span",{style:{color:"#e0e0e0",fontWeight:700,whiteSpace:"pre"}},line.prefix),
+            ...line.tiles.map((t,j)=>
+              React.createElement("span",{key:j,style:{
+                backgroundColor:TILE_COLORS[t.color],
+                color:"#fff",
+                fontWeight:800,
+                padding:"1px 4px",
+                borderRadius:3,
+                fontSize:12,
+                fontFamily:"'Montserrat',sans-serif",
+                minWidth:16,
+                textAlign:"center",
+                display:"inline-block"
+              }},t.letter)
+            ),
+            line.suffix&&React.createElement("span",{style:{color:"#e0e0e0",marginLeft:4}},line.suffix)
+          );
+        }
+        return React.createElement("div",{key:i,style:{
           color: line.startsWith("─")?"#538d4e":
                  line.startsWith("Find:")?"#378ADD":
                  line.startsWith("My Word:")?"#b59f3b":
                  line.startsWith("Guess:")?"#e0e0e0":
                  line.startsWith("  ")?"#d0d0d0":"#b8b8b8",
           fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400"
-        }},line)
-      )
+        }},line);
+      })
     ),
 
     // Keyboard — pinned to bottom, flexShrink:0
@@ -498,7 +523,7 @@ function App() {
               key,
               onMouseDown:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
               onTouchEnd:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
-              style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.55):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:isWide(key)?Math.max(8,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
+              style:{...btnBase,height:keyH,width:isWide(key)?Math.floor(keyW*1.55):keyW,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:key==="⌫"?Math.max(18,Math.floor(keyW*0.64)):isWide(key)?Math.max(10,keyFontSize-2):keyFontSize,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s"}
             },key);
           })
         )
