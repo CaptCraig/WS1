@@ -396,7 +396,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.011":"WORDLE SOLITAIRE v.011",
+        state.mode==="myword"?"WORDLE MY WORD v.012":"WORDLE SOLITAIRE v.012",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -479,7 +479,7 @@ function App() {
     ),
 
     // Scrollable log — fills remaining space, padded so content clears fixed keyboard
-    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",margin:"0 8px",marginBottom:kbH+8,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
+    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"none",margin:"0 8px",marginBottom:kbH+24,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px",fontFamily:"'Courier New',monospace",fontSize:11,lineHeight:1.5,minHeight:0}},
       log.map((line,i)=>{
         if (line && line.type==="tiles") {
           return React.createElement("div",{key:i,style:{display:"flex",alignItems:"center",gap:2,marginBottom:1}},
