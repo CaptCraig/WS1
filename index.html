@@ -536,5 +536,14 @@ function App() {
 
 ReactDOM.render(React.createElement(App), document.getElementById("wordle-root"));
 </script>
+<!-- Home button (captcraig.net) -->
+<a href="/" id="cc-home" aria-label="Back to home page">⌂ Home</a>
+<style>
+#cc-home{position:absolute;top:calc(16px + env(safe-area-inset-top));left:calc(14px + env(safe-area-inset-left));
+z-index:9999;padding:5px 12px;border-radius:999px;font:600 14px/1.2 system-ui,-apple-system,sans-serif;
+text-decoration:none;color:#ddd;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);
+opacity:.75;transition:opacity .15s,background .15s}
+#cc-home:hover,#cc-home:focus-visible{opacity:1;background:rgba(255,255,255,.22)}
+</style>
 </body>
 </html>
