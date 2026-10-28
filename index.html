@@ -18,7 +18,7 @@
       height: 100vh;
       height: 100dvh;
       padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
+      /* no bottom padding: the log's bottom margin already clears the keyboard and home-bar area */
       box-sizing: border-box;
       overflow: hidden;
     }
@@ -146,6 +146,7 @@ function App() {
   useEffect(()=>{
     const onResize=()=>setScreenSize({w:window.innerWidth,h:window.innerHeight});
     window.addEventListener("resize",onResize);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(onResize);
     return()=>window.removeEventListener("resize",onResize);
   },[]);
   const [kbMode, setKbMode] = useState("guess"); // "guess" | "find" | "myword"
@@ -360,21 +361,41 @@ function App() {
   // Keyboard: fixed small keys guaranteed to fit on iPhone
   // Row width: 10 keys × keyW + 9 gaps must fit vw
   // iPhone (~390px) lands at ~33px wide as before; iPad/Mac grow up to 60px.
-  const keyW = Math.min(60, Math.max(22, Math.floor((vw - 20) / 11)));
+  // iPad reports itself like a Mac in Safari, but has a touch screen
+  const isTablet = vw >= 600 && (navigator.maxTouchPoints || 0) > 0;
+  // Phones: fill the width. iPad/Mac: spread across ~72% of the screen (wider, not taller).
+  const keyW = vw < 600
+    ? Math.min(60, Math.max(22, Math.floor((vw - 20) / 11)))
+    : Math.min(96, Math.max(60, Math.floor(vw * (isTablet ? 0.62 : 0.72) / 10.6)));
   const keyGap = vw >= 600 ? 5 : 3;
   // Height scales with width but is capped by screen height so landscape iPad/Mac keep room for the log
   const keyH = Math.min(Math.floor(keyW * 1.25), Math.max(41, Math.floor(vh * 0.065)));
   const keyFontSize = Math.min(26, Math.floor(keyH * 0.48));
   const wideW = Math.floor(keyW * 1.55);
   // "ENTER" is ~4 em wide in Montserrat bold; size it to fit the wide key with a little margin
-  const enterFontSize = Math.min(keyFontSize, Math.floor((wideW - 8) / 4.1));
+  // Measure "ENTER" in the actual key font and make it as large as fits the key
+  const enterFontSize = (()=>{
+    try {
+      const c = (window.__enterCanvas = window.__enterCanvas || document.createElement("canvas")).getContext("2d");
+      c.font = "700 100px Montserrat, sans-serif";
+      const perPx = c.measureText("ENTER").width / 100;   // width per 1px of font size
+      // iPhone: fill the key (2px each side). iPad/Mac: no bigger than the letters, with margin.
+      return vw < 500
+        ? Math.max(8, Math.min(Math.floor(keyH * 0.5), Math.floor((wideW - 4) / perPx)))
+        : Math.max(8, Math.min(keyFontSize, Math.floor((wideW - 16) / perPx)));
+    } catch(e) { return Math.min(keyFontSize, Math.floor((wideW - 8) / 4.1)); }
+  })();
   // Backspace icon: drawn as SVG so it scales reliably on every device
   const bsIconH = Math.floor(keyH * 0.5);
   const bsIcon = React.createElement("svg",{width:Math.floor(bsIconH*1.4),height:bsIconH,viewBox:"0 0 28 20",fill:"none",stroke:"currentColor",strokeWidth:2,strokeLinejoin:"round",strokeLinecap:"round",style:{display:"block",pointerEvents:"none"}},
     React.createElement("path",{d:"M9 2 H25 a2 2 0 0 1 2 2 V16 a2 2 0 0 1 -2 2 H9 L2 10 Z"}),
     React.createElement("path",{d:"M13 6.5 L20 13.5 M20 6.5 L13 13.5"})
   );
-  const kbH = 3 * keyH + 2 * keyGap + 8; // actual keyboard height: 3 rows + 2 gaps + 4px top/bottom padding (safe-area inset added in CSS)
+  // Space under the keys: phones keep the full home-bar inset; iPad/Mac only a small margin
+  const kbBottomPad = vw < 600
+    ? "calc(4px + env(safe-area-inset-bottom, 0px))"
+    : "max(4px, calc(env(safe-area-inset-bottom, 0px) - 14px))";
+  const kbH = 3 * keyH + 2 * keyGap + 3; // 3 rows + 2 gaps + 3px top padding (bottom padding is kbBottomPad)
 
   // Misc panel width
   const miscW = Math.max(100, Math.floor(vw * 0.22));
@@ -477,11 +498,12 @@ function App() {
     ),
 
     // Scrollable log — fills remaining space, padded so content clears fixed keyboard
-    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"none",margin:"0 8px",marginBottom:`calc(${kbH + 8}px + env(safe-area-inset-bottom, 0px))`,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px 20px 10px",fontFamily:"'Courier New',monospace",fontSize:logFont,lineHeight:1.4,minHeight:0}},
+    React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"none",margin:"0 8px",marginBottom:`calc(${kbH + 5}px + ${kbBottomPad})`,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px 20px 10px",fontFamily:"'Courier New',monospace",fontSize:logFont,lineHeight:1.4,minHeight:0}},
       log.map((line,i)=>{
         if (line && line.type==="words") {
-          return React.createElement("div",{key:i,style:{color:"#d0d0d0",paddingLeft:"2ch",overflowWrap:"normal",wordBreak:"keep-all"}},
-            line.words.join(", "));
+          // No commas: words laid out in aligned monospace columns that reflow with width
+          return React.createElement("div",{key:i,style:{color:"#d0d0d0",paddingLeft:"2ch",display:"grid",gridTemplateColumns:"repeat(auto-fill, 5ch)",columnGap:"1.5ch"}},
+            ...line.words.map((w,j)=>React.createElement("span",{key:j},w)));
         }
         if (line && line.type==="tiles") {
           return React.createElement("div",{key:i,style:{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginBottom:3}},
@@ -516,7 +538,7 @@ function App() {
     ),
 
     // Keyboard — position fixed to bottom of viewport, always visible
-    React.createElement("div",{style:{position:"fixed",bottom:0,left:0,right:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:"4px 4px calc(4px + env(safe-area-inset-bottom,0px)) 4px",background:"#121213",zIndex:100}},
+    React.createElement("div",{style:{position:"fixed",bottom:0,left:0,right:0,display:"flex",flexDirection:"column",gap:keyGap,alignItems:"center",padding:`3px 4px ${kbBottomPad} 4px`,background:"#121213",zIndex:100}},
       ...KEYBOARD_ROWS.map((row,ri)=>
         React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
           ...row.map(key=>{
