@@ -109,8 +109,25 @@ function filterWords(list, guesses, answer) {
 const state = {
   answer:"", guesses:[], current:"",
   gameOver:false, showNewGame:false, usedWords:new Set(),
-  mode:"solitaire", myWord:""
+  mode:"solitaire", myWord:"",
+  showRemaining:true, showStats:true
 };
+// Remember the two display options on this device (ignored if storage is unavailable)
+try {
+  const saved = JSON.parse(localStorage.getItem("ws1opts")||"{}");
+  if (typeof saved.showRemaining==="boolean") state.showRemaining = saved.showRemaining;
+  if (typeof saved.showStats==="boolean") state.showStats = saved.showStats;
+} catch(e) {}
+function saveOpts(){
+  try { localStorage.setItem("ws1opts", JSON.stringify({showRemaining:state.showRemaining, showStats:state.showStats})); } catch(e) {}
+}
+// Letter stats: for each letter, how many remaining words contain it (most common first)
+function letterStats(words){
+  const counts={};
+  words.forEach(w=>new Set(w).forEach(ch=>{ counts[ch]=(counts[ch]||0)+1; }));
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
+    .map(([ch,n])=>ch.toUpperCase()+"-"+n);
+}
 function initGame() {
   if (state.mode==="myword") {
     state.answer = state.myWord;
@@ -121,7 +138,7 @@ function initGame() {
     state.usedWords.add(state.answer);
   }
   state.guesses=[]; state.current="";
-  state.gameOver=false; state.showNewGame=false;
+  state.gameOver=false; state.showNewGame=false; state.pendingNew=false;
 }
 initGame();
 
@@ -153,6 +170,7 @@ function App() {
   const [log, setLog] = useState(["─── New Game ───", "Guess: "]);
   const devBuffer = useRef("");
   const logRef = useRef(null);
+  const lastTapRef = useRef({key:"",t:0});
 
   // Word lists are stored as one log entry and wrapped by the browser,
   // so they reflow automatically when the window is resized or rotated.
@@ -188,8 +206,13 @@ function App() {
   },[]);
 
   const processGameKey = useCallback((key)=>{
+    if (state.gameOver && state.pendingNew && /^[a-z]$/.test(key)) {
+      // First letter of the next puzzle: now clear the board and start it
+      if (state.mode==="myword") state.mode="solitaire";
+      initGame(); setFlipping({});
+    }
     if (state.gameOver) {
-      if (key==="Enter"&&state.showNewGame){ 
+      if (key==="Enter"&&state.showNewGame&&!state.pendingNew){ 
         initGame(); setFlipping({}); 
         addLog(["─── Restart ───","Guess: "]);
         rerender(); 
@@ -216,13 +239,16 @@ function App() {
       const isWin=word===state.answer, isLast=state.guesses.length>=6;
       const tr = tileRow(word,state.answer);
       tr.prefix = "Guess:  "+word.toUpperCase()+" → ";
-      tr.suffix = isWin?"✓":remaining.length+" remaining";
+      tr.suffix = isWin?"✓":(state.showRemaining?remaining.length+" remaining":"");
       updateLastLog(tr);
       rerender();
 
       // Show remaining words packed into lines dynamically
-      if (!isWin && !isLast && remaining.length>0 && remaining.length<=200) {
+      if (state.showRemaining && !isWin && !isLast && remaining.length>0 && remaining.length<=200) {
         addLog(packWords(remaining));
+      }
+      if (state.showStats && !isWin && !isLast && remaining.length>0) {
+        addLog([{type:"stats", items:letterStats(remaining)}]);
       }
 
       if (isWin||isLast) {
@@ -235,9 +261,9 @@ function App() {
             isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`:`The word was ${state.answer.toUpperCase()}`,
             "─────────────────"
           ];
-          // Go straight on to the next puzzle with a fresh Guess prompt
-          if (state.mode==="myword") state.mode="solitaire";
-          initGame(); setFlipping({});
+          // Prompt for the next puzzle, but leave the finished board showing
+          // until the player types a letter or presses SOLITAIRE
+          state.pendingNew=true;
           addLog([...summary,"─── New Game ───","Guess: "]);
           rerender();
         },1800);
@@ -401,6 +427,18 @@ function App() {
   const miscW = Math.max(100, Math.floor(vw * 0.22));
 
   const btnBase = {border:"none",cursor:"pointer",fontFamily:"'Montserrat',sans-serif",fontWeight:700,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"};
+  const radioFont = vw < 500 ? 9 : 11;
+  const clearSize = vw < 500 ? 28 : 34;
+  // A round on/off indicator with its label beside it; indent=1 for the sub-options
+  const radio = (label, on, onTap, indent)=>React.createElement("div",{
+      key:label,
+      onPointerDown:(e)=>{e.preventDefault();onTap();},
+      style:{display:"flex",alignItems:"center",gap:6,paddingLeft:indent?(vw<500?12:18):0,cursor:"pointer",userSelect:"none",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",minHeight:vw<500?18:22}
+    },
+    React.createElement("span",{style:{flexShrink:0,width:radioFont+5,height:radioFont+5,borderRadius:"50%",border:`2px solid ${on?"#538d4e":"#818384"}`,display:"flex",alignItems:"center",justifyContent:"center",boxSizing:"border-box"}},
+      on&&React.createElement("span",{style:{width:radioFont-3,height:radioFont-3,borderRadius:"50%",background:"#538d4e"}})),
+    React.createElement("span",{style:{fontSize:radioFont,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:on?"#fff":"#a0a0a0",lineHeight:1.15}},label)
+  );
   const fnBtn = (bg,active)=>({...btnBase,background:bg,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:10,letterSpacing:1,textTransform:"uppercase",opacity:active?1:0.7,boxShadow:active?"0 0 0 2px #fff2":"none"});
 
   const startFind = ()=>{ findRef.current=""; setKbMode("find"); addLog("Find: "); };
@@ -415,7 +453,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.018":"WORDLE SOLITAIRE v.018",
+        state.mode==="myword"?"WORDLE MY WORD v.019":"WORDLE SOLITAIRE v.019",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -446,53 +484,50 @@ function App() {
       // Misc panel — right half, full to screen edge
       React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",height:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
 
-        // Mode indicator + screen size
-        React.createElement("div",{style:{fontSize:9,color:"#818384",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},
-          kbMode==="find"?"● Find":kbMode==="myword"?"● My Word":"● "+state.mode
-        ),
-        React.createElement("div",{style:{fontSize:11,color:"#e0e0e0",letterSpacing:0.5,marginBottom:2,fontWeight:700}},
-          screenSize.w+"×"+screenSize.h
+        // Top row: mode + screen size on the left, square CLEAR button at top right
+        React.createElement("div",{style:{display:"flex",alignItems:"flex-start",gap:6}},
+          React.createElement("div",{style:{flex:1,minWidth:0}},
+            React.createElement("div",{style:{fontSize:9,color:"#818384",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},
+              kbMode==="find"?"● Find":kbMode==="myword"?"● My Word":"● "+state.mode
+            ),
+            React.createElement("div",{style:{fontSize:11,color:"#e0e0e0",letterSpacing:0.5,fontWeight:700}},
+              screenSize.w+"×"+screenSize.h
+            )
+          ),
+          React.createElement("button",{
+            onPointerDown:(e)=>{e.preventDefault();doClear();},
+            style:{...btnBase,flexShrink:0,height:clearSize,minWidth:clearSize,padding:"0 6px",borderRadius:5,background:"#2a2a2b",color:"#fff",fontSize:radioFont,letterSpacing:0.5,textTransform:"uppercase",border:"1px solid #3a3a3c"}
+          },"Clear")
         ),
 
         // Spacer
         React.createElement("div",{style:{flex:1}}),
 
         // Restart/New — only when game over
-        showNewGame&&React.createElement("div",{style:{display:"flex",gap:4,marginBottom:4}},
+        showNewGame&&!state.pendingNew&&React.createElement("div",{style:{display:"flex",gap:4,marginBottom:4}},
           React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();doRestart();},
-            onTouchEnd:(e)=>{e.preventDefault();doRestart();},
+            onPointerDown:(e)=>{e.preventDefault();doRestart();},
             style:{...btnBase,flex:1,padding:"5px 4px",background:"#538d4e",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
           },"Restart"),
           React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();startSolitaire();},
-            onTouchEnd:(e)=>{e.preventDefault();startSolitaire();},
+            onPointerDown:(e)=>{e.preventDefault();startSolitaire();},
             style:{...btnBase,flex:1,padding:"5px 4px",background:"#378ADD",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
           },"New")
         ),
 
         // Function buttons at bottom of misc panel
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
-          React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();startSolitaire();},
-            onTouchEnd:(e)=>{e.preventDefault();startSolitaire();},
-            style:fnBtn(state.mode==="solitaire"&&kbMode==="guess"?"#538d4e":"#2a2a2b", state.mode==="solitaire"&&kbMode==="guess")
-          },"Solitaire"),
+          radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0),
+          radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); rerender(); }, 1),
+          radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); rerender(); }, 1),
           devMode&&React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();startMyWord();},
-            onTouchEnd:(e)=>{e.preventDefault();startMyWord();},
+            onPointerDown:(e)=>{e.preventDefault();startMyWord();},
             style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
           },"My Word"),
           React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();startFind();},
-            onTouchEnd:(e)=>{e.preventDefault();startFind();},
+            onPointerDown:(e)=>{e.preventDefault();startFind();},
             style:fnBtn(kbMode==="find"?"#378ADD":"#2a2a2b", kbMode==="find")
-          },"Find"),
-          React.createElement("button",{
-            onMouseDown:(e)=>{e.preventDefault();doClear();},
-            onTouchEnd:(e)=>{e.preventDefault();doClear();},
-            style:fnBtn("#2a2a2b", false)
-          },"Clear")
+          },"Find")
         )
       )
     ),
@@ -500,6 +535,10 @@ function App() {
     // Scrollable log — fills remaining space, padded so content clears fixed keyboard
     React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"none",margin:"0 8px",marginBottom:`calc(${kbH + 5}px + ${kbBottomPad})`,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px 20px 10px",fontFamily:"'Courier New',monospace",fontSize:logFont,lineHeight:1.4,minHeight:0}},
       log.map((line,i)=>{
+        if (line && line.type==="stats") {
+          return React.createElement("div",{key:i,style:{color:"#8fb3d9",paddingLeft:"2ch",display:"flex",flexWrap:"wrap",columnGap:"1.5ch"}},
+            ...line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap"}},t)));
+        }
         if (line && line.type==="words") {
           // No commas: words laid out in aligned monospace columns that reflow with width
           return React.createElement("div",{key:i,style:{color:"#d0d0d0",paddingLeft:"2ch",display:"grid",gridTemplateColumns:"repeat(auto-fill, 5ch)",columnGap:"1.5ch"}},
@@ -543,13 +582,16 @@ function App() {
         React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
           ...row.map(key=>{
             const s=letterStates[key];
-            const bg=kbMode!=="guess"?COLORS.key:
+            const bg=(kbMode==="myword"||state.pendingNew)?COLORS.key:  // plain keys while typing a secret word or while the finished board waits (FIND keeps the colors)
               s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
             const handler=kbMode==="find"?processFindKey:kbMode==="myword"?processMyWordKey:processGameKey;
             return React.createElement("button",{
               key,
-              onMouseDown:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
-              onTouchEnd:(e)=>{e.preventDefault();handler(key==="⌫"?"Backspace":key);},
+              onPointerDown:(e)=>{e.preventDefault();
+                const now=Date.now(), lt=lastTapRef.current;
+                if (lt.key===key && now-lt.t<80) return;   // ignore a ghost second hit of the same key
+                lastTapRef.current={key,t:now};
+                handler(key==="⌫"?"Backspace":key);},
               style:{...btnBase,height:keyH,width:isWide(key)?wideW:keyW,padding:0,borderRadius:4,backgroundColor:bg,color:"#fff",fontSize:key==="Enter"?enterFontSize:keyFontSize,letterSpacing:key==="Enter"?0:undefined,textTransform:"uppercase",display:"flex",alignItems:"center",justifyContent:"center",userSelect:"none",transition:"background-color 0.3s",overflow:"hidden"}
             },key==="⌫"?bsIcon:key);
           })
