@@ -284,31 +284,51 @@ function App() {
     }
   },[rerender,addLog,updateLastLog,tileRow]);
 
-  // Find mode state
-  const findRef = useRef("");
+  // Find mode state: include letters, then (optionally) exclude letters, all on one prompt line
+  const findRef = useRef("");          // include letters
+  const excludeRef = useRef("");       // exclude letters
+  const findPhaseRef = useRef("include");
+  const [findExclude, setFindExclude] = useState(false);
+  const findExcludeRef = useRef(false);
+  const setExcl = (v)=>{ findExcludeRef.current=v; setFindExclude(v); };
+  const findPrompt = ()=>"FIND, INCLUDE: "+findRef.current.toUpperCase()+
+    (findPhaseRef.current==="exclude"
+      // iPhone: EXCLUDE on its own line, lined up under INCLUDE ("FIND, " is 6 characters)
+      ? (window.innerWidth<500 ? "\n      " : " ")+"EXCLUDE: "+excludeRef.current.toUpperCase()
+      : "");
+  const endFind = ()=>{ findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; setExcl(false); setKbMode("guess"); };
   const processFindKey = useCallback((key)=>{
     if (key==="Enter") {
-      if (findRef.current.length<2) return;
-      const letters=findRef.current.split("");
-      const results=VALID_GUESSES.filter(w=>letters.every(l=>w.includes(l))).sort();
-      const summary = results.length>0
-        ? ["Find: "+findRef.current.toUpperCase()+" → "+results.length+" words found", ...packWords(results)]
-        : ["Find: "+findRef.current.toUpperCase()+" → no words found"];
-      addLog(summary);
-      findRef.current="";
-      setKbMode("guess");
-      addLog("Guess: ");
-      rerender(); return;
+      if (findPhaseRef.current==="include") {
+        if (findRef.current.length<2) return;
+        if (findExcludeRef.current) {          // move on to the exclude letters, same line
+          findPhaseRef.current="exclude"; updateLastLog(findPrompt()); rerender(); return;
+        }
+      }
+      const inc=findRef.current, exc=excludeRef.current;
+      const results=VALID_GUESSES.filter(w=>inc.split("").every(l=>w.includes(l)) && !exc.split("").some(l=>w.includes(l))).sort();
+      const label="Find: "+inc.toUpperCase()+(exc?" − "+exc.toUpperCase():"");
+      updateLastLog(results.length>0 ? label+" → "+results.length+" words found" : label+" → no words found");
+      addLog([...(results.length>0?packWords(results):[]), "Guess: "+state.current]);
+      endFind(); rerender(); return;
     }
-    if (key==="Backspace"){ 
-      findRef.current=findRef.current.slice(0,-1); 
-      updateLastLog("Find: "+findRef.current.toUpperCase());
-      rerender(); return; 
+    if (key==="Backspace"){
+      if (findPhaseRef.current==="exclude") {
+        if (excludeRef.current.length===0) findPhaseRef.current="include";   // back up into the include letters
+        else excludeRef.current=excludeRef.current.slice(0,-1);
+      } else findRef.current=findRef.current.slice(0,-1);
+      updateLastLog(findPrompt()); rerender(); return;
     }
-    if (/^[a-z]$/.test(key)&&findRef.current.length<8){ 
-      findRef.current+=key; 
-      updateLastLog("Find: "+findRef.current.toUpperCase());
-      rerender(); 
+    if (/^[a-z]$/.test(key)) {
+      if (findPhaseRef.current==="exclude") {
+        // any letter not already included, each only once
+        if (findRef.current.includes(key) || excludeRef.current.includes(key)) return;
+        excludeRef.current+=key;
+      } else {
+        if (findRef.current.length>=8) return;
+        findRef.current+=key;
+      }
+      updateLastLog(findPrompt()); rerender();
     }
   },[addLog,updateLastLog,rerender]);
 
@@ -355,7 +375,9 @@ function App() {
         }
       }
 
-      if(key==="Escape"){ setKbMode("guess"); findRef.current=""; myWordRef.current=""; rerender(); return; }
+      if(key==="Escape"){
+        if(kbMode==="find") updateLastLog("Guess: "+state.current);
+        endFind(); myWordRef.current=""; rerender(); return; }
       if(kbMode==="find") processFindKey(key);
       else if(kbMode==="myword") processMyWordKey(key);
       else processGameKey(key);
@@ -430,22 +452,52 @@ function App() {
   const radioFont = vw < 500 ? 9 : 11;
   const clearSize = vw < 500 ? 28 : 34;
   // A round on/off indicator with its label beside it; indent=1 for the sub-options
-  const radio = (label, on, onTap, indent)=>React.createElement("div",{
+  const radio = (label, on, onTap, indent, color="#538d4e")=>React.createElement("div",{
       key:label,
       onPointerDown:(e)=>{e.preventDefault();onTap();},
       style:{display:"flex",alignItems:"center",gap:6,paddingLeft:indent?(vw<500?12:18):0,cursor:"pointer",userSelect:"none",WebkitTapHighlightColor:"transparent",touchAction:"manipulation",minHeight:vw<500?18:22}
     },
-    React.createElement("span",{style:{flexShrink:0,width:radioFont+5,height:radioFont+5,borderRadius:"50%",border:`2px solid ${on?"#538d4e":"#818384"}`,display:"flex",alignItems:"center",justifyContent:"center",boxSizing:"border-box"}},
-      on&&React.createElement("span",{style:{width:radioFont-3,height:radioFont-3,borderRadius:"50%",background:"#538d4e"}})),
+    React.createElement("span",{style:{flexShrink:0,width:radioFont+5,height:radioFont+5,borderRadius:"50%",border:`2px solid ${on?color:"#818384"}`,display:"flex",alignItems:"center",justifyContent:"center",boxSizing:"border-box"}},
+      on&&React.createElement("span",{style:{width:radioFont-3,height:radioFont-3,borderRadius:"50%",background:color}})),
     React.createElement("span",{style:{fontSize:radioFont,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:on?"#fff":"#a0a0a0",lineHeight:1.15}},label)
   );
   const fnBtn = (bg,active)=>({...btnBase,background:bg,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:10,letterSpacing:1,textTransform:"uppercase",opacity:active?1:0.7,boxShadow:active?"0 0 0 2px #fff2":"none"});
 
-  const startFind = ()=>{ findRef.current=""; setKbMode("find"); addLog("Find: "); };
+  // FIND / FIND EXCLUDE: overwrite the Guess prompt with the Find prompt (no new line)
+  const startFind = (withExclude)=>{
+    if (kbMode==="find") {
+      if (withExclude && findPhaseRef.current==="include") { setExcl(!findExcludeRef.current); return; }  // toggle exclude mid-entry
+      if (!withExclude) { updateLastLog("Guess: "+state.current); endFind(); rerender(); return; }        // tap FIND again: cancel
+      return;
+    }
+    findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
+    setExcl(!!withExclude); setKbMode("find");
+    updateLastLog("FIND, INCLUDE: ");
+  };
   const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
   const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
   const doRestart = ()=>{ initGame(); setFlipping({}); addLog(["─── Restart ───","Guess: "]); rerender(); };
-  const doClear = ()=>{ setLog(["─── Log Cleared ───","Guess: "]); };
+  // Turning an option on mid-game: show it right away for the current position,
+  // inserted just above the prompt line, without repeating the last guess
+  const showNow = (what)=>{
+    if (state.gameOver || state.pendingNew || state.guesses.length===0) return;
+    const remaining=filterWords(ANSWERS,state.guesses,state.answer);
+    if (remaining.length===0) return;
+    let lines;
+    if (what==="words") {
+      lines=["  "+remaining.length+" remaining", ...(remaining.length<=200?packWords(remaining):[])];
+    } else {
+      lines=[{type:"stats", items:letterStats(remaining)}];
+    }
+    setLog(prev=>[...prev.slice(0,-1), ...lines, prev[prev.length-1]].slice(-MAX_LOG_LINES));
+  };
+  // CLEAR: wipe the log and the board, and start a fresh Solitaire puzzle
+  const doClear = ()=>{
+    state.mode="solitaire"; initGame(); setFlipping({});
+    endFind(); myWordRef.current="";
+    setLog(["─── Log Cleared ───","─── New Game ───","Guess: "]);
+    rerender();
+  };
 
   // Layout: full viewport flex column, keyboard pinned to bottom
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden",background:"#121213",color:"#fff",fontFamily:"'Montserrat',sans-serif"}},
@@ -453,7 +505,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.019":"WORDLE SOLITAIRE v.019",
+        state.mode==="myword"?"WORDLE MY WORD v.020":"WORDLE SOLITAIRE v.020",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -518,16 +570,14 @@ function App() {
         // Function buttons at bottom of misc panel
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
           radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0),
-          radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); rerender(); }, 1),
-          radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); rerender(); }, 1),
+          radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 1),
+          radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 1),
           devMode&&React.createElement("button",{
             onPointerDown:(e)=>{e.preventDefault();startMyWord();},
             style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
           },"My Word"),
-          React.createElement("button",{
-            onPointerDown:(e)=>{e.preventDefault();startFind();},
-            style:fnBtn(kbMode==="find"?"#378ADD":"#2a2a2b", kbMode==="find")
-          },"Find")
+          radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD"),
+          radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD")
         )
       )
     ),
@@ -567,11 +617,12 @@ function App() {
         }
         return React.createElement("div",{key:i,style:{
           color: line.startsWith("─")?"#538d4e":
-                 line.startsWith("Find:")?"#378ADD":
+                 (line.startsWith("Find:")||line.startsWith("FIND,"))?"#378ADD":
                  line.startsWith("My Word:")?"#b59f3b":
                  line.startsWith("Guess:")?"#e0e0e0":
                  line.startsWith("  ")?"#d0d0d0":"#b8b8b8",
-          fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400"
+          fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400",
+          whiteSpace: line.startsWith("FIND,")?"pre-wrap":undefined
         }},line);
       })
     ),
