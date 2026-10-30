@@ -106,6 +106,35 @@ function superRank(pool, remaining, topN){
 // Opening position never changes, so its result is stored rather than recomputed (~2 s on a phone)
 const SUPER_OPENING=[{word:"raise",exp:63.9,isAns:true},{word:"roate",exp:62.9,isAns:false},{word:"tiare",exp:64.2,isAns:false}];
 
+// ── ENCRYPT / DECRYPT: a keyed cipher that maps any 5 letters to 5 letters, and back ──
+// Key: CRAIG and CIGAR (Craig's name and Wordle's first answer) plus the primes 2,3,5,7,11.
+//  1. Shuffle: CRAIG rearranged into CIGAR gives the position order 0,3,4,2,1.
+//  2. Offset: each position gets its own shift built from the key letters and a prime.
+//  3. Chain forward: each output letter also adds prime × the previous output letter.
+//  4. Chain backward: a second pass right-to-left, so every input letter affects every output letter.
+// Every step can be undone exactly, so decrypt(encrypt(w)) === w for any 5 letters.
+const CIPHER_P=[2,3,5,7,11];
+const CIPHER_PERM=(()=>{const a="craig",b="cigar";return b.split("").map(ch=>a.indexOf(ch));})();   // [0,3,4,2,1]
+const CIPHER_K=[0,1,2,3,4].map(j=>("craig".charCodeAt(j)-96)*CIPHER_P[j]+("cigar".charCodeAt(j)-97)*CIPHER_P[4-j]);
+const CIPHER_SEED=13;
+const md=(n)=>((n%26)+26)%26;
+function encryptWord(w){
+  const x=w.split("").map(ch=>ch.charCodeAt(0)-97);
+  const c=[]; let prev=CIPHER_SEED;
+  for(let j=0;j<5;j++){ c[j]=md(x[CIPHER_PERM[j]]+CIPHER_K[j]+prev*CIPHER_P[j]); prev=c[j]; }
+  const d=[]; prev=CIPHER_SEED;
+  for(let j=4;j>=0;j--){ d[j]=md(c[j]+prev*CIPHER_P[4-j]+CIPHER_K[4-j]); prev=d[j]; }
+  return d.map(n=>String.fromCharCode(97+n)).join("");
+}
+function decryptWord(e){
+  const d=e.split("").map(ch=>ch.charCodeAt(0)-97);
+  const c=[]; let prev=CIPHER_SEED;
+  for(let j=4;j>=0;j--){ c[j]=md(d[j]-prev*CIPHER_P[4-j]-CIPHER_K[4-j]); prev=d[j]; }
+  const x=[]; prev=CIPHER_SEED;
+  for(let j=0;j<5;j++){ x[CIPHER_PERM[j]]=md(c[j]-CIPHER_K[j]-prev*CIPHER_P[j]); prev=c[j]; }
+  return x.map(n=>String.fromCharCode(97+n)).join("");
+}
+
 function computeLetterStates(guesses, answer) {
   const states={}, p={correct:3,present:2,absent:1,"":0};
   for (const guess of guesses)
@@ -159,7 +188,7 @@ function initGame() {
     state.usedWords.add(state.answer);
   }
   state.guesses=[]; state.current="";
-  state.gameOver=false; state.showNewGame=false; state.pendingNew=false;
+  state.gameOver=false; state.showNewGame=false; state.pendingNew=false; state.decryptCode="";
 }
 initGame();
 
@@ -286,7 +315,9 @@ function App() {
           state.showNewGame=true;
           const summary=["","─── Game Summary ───",
             ...state.guesses.map(g=>{ const tr=tileRow(g,state.answer); tr.prefix="  "; tr.suffix=""; return tr; }),
-            isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`:`The word was ${state.answer.toUpperCase()}`,
+            isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`
+                 :(state.decryptCode?`Sorry, the decrypted word was ${state.answer.toUpperCase()}.`:`The word was ${state.answer.toUpperCase()}`),
+            ...(isWin&&state.decryptCode?[`Congratulations, you have successfully decrypted ${state.decryptCode.toUpperCase()} to ${state.answer.toUpperCase()}!`]:[]),
             "─────────────────"
           ];
           // Prompt for the next puzzle, but leave the finished board showing
@@ -387,6 +418,32 @@ function App() {
 
   // My Word mode state
   const myWordRef = useRef(state.myWord||"");
+  // ENCRYPT / DECRYPT entry (prompt replaces the Guess line, like FIND)
+  const cryptRef = useRef("");
+  const cryptPrompt = (mode)=>(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ")+cryptRef.current.toUpperCase();
+  const leaveCrypt = ()=>{ cryptRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); };
+  const processCryptKey = useCallback((key, mode)=>{
+    if (key==="Enter") {
+      const w=cryptRef.current;
+      if (w.length!==5) { setShaking(true); setTimeout(()=>setShaking(false),500); return; }
+      if (mode==="encrypt") {
+        if (!VALID_GUESSES.includes(w)) { updateLastLog("ENCRYPT: "+w.toUpperCase()+" ✗ not in word list"); cryptRef.current=""; addLog("ENCRYPT: "); rerender(); return; }
+        updateLastLog("ENCRYPT: "+w.toUpperCase()+" → "+encryptWord(w).toUpperCase());
+        cryptRef.current=""; addLog("ENCRYPT: "); rerender(); return;      // ready for the next word
+      }
+      const plain=decryptWord(w);
+      if (!VALID_GUESSES.includes(plain)) { updateLastLog("DECRYPT: "+w.toUpperCase()+" ✗ not a valid code"); cryptRef.current=""; addLog("DECRYPT: "); rerender(); return; }
+      // valid code: its word secretly becomes the answer of a fresh Solitaire puzzle
+      state.mode="solitaire"; initGame(); state.answer=plain; state.decryptCode=w; setFlipping({});
+      cryptRef.current=""; setKbMode("guess");
+      updateLastLog("DECRYPT: "+w.toUpperCase()+" ✓");
+      addLog(["─── Decrypted Puzzle ───","Guess: "]);
+      rerender(); return;
+    }
+    if (key==="Backspace") { cryptRef.current=cryptRef.current.slice(0,-1); updateLastLog(cryptPrompt(mode)); rerender(); return; }
+    if (/^[a-z]$/.test(key) && cryptRef.current.length<5) { cryptRef.current+=key; updateLastLog(cryptPrompt(mode)); rerender(); }
+  },[addLog,updateLastLog,rerender]);
+
   const processMyWordKey = useCallback((key)=>{
     if (key==="Enter") {
       if (myWordRef.current.length!==5) return;
@@ -429,15 +486,17 @@ function App() {
       }
 
       if(key==="Escape"){
+        if(kbMode==="encrypt"||kbMode==="decrypt"){ leaveCrypt(); rerender(); return; }
         if(kbMode==="find") updateLastLog("Guess: "+state.current);
         endFind(); myWordRef.current=""; rerender(); return; }
-      if(kbMode==="find") processFindKey(key);
+      if(kbMode==="encrypt"||kbMode==="decrypt") processCryptKey(key,kbMode);
+      else if(kbMode==="find") processFindKey(key);
       else if(kbMode==="myword") processMyWordKey(key);
       else processGameKey(key);
     }
     document.addEventListener("keydown",onKeyDown);
     return()=>document.removeEventListener("keydown",onKeyDown);
-  },[processGameKey,processFindKey,processMyWordKey,kbMode,rerender]);
+  },[processGameKey,processFindKey,processMyWordKey,processCryptKey,kbMode,rerender]);
 
   const { answer, guesses, current, gameOver, showNewGame } = state;
   const letterStates = computeLetterStates(guesses, answer);
@@ -500,7 +559,12 @@ function App() {
 
   const btnBase = {border:"none",cursor:"pointer",fontFamily:"'Montserrat',sans-serif",fontWeight:700,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"};
   const radioFont = vw < 500 ? 9 : 11;
-  const clearSize = vw < 500 ? 28 : 34;
+  const clearBtn = React.createElement("button",{
+      key:"clear",
+      onPointerDown:(e)=>{e.preventDefault();doClear();},
+      style:{...btnBase,flexShrink:0,height:(vw < 500 ? 24 : 30),minWidth:(vw < 500 ? 24 : 30),padding:"0 6px",borderRadius:5,background:"#2a2a2b",color:"#fff",fontSize:radioFont,letterSpacing:0.5,textTransform:"uppercase",border:"1px solid #3a3a3c"}
+    },"Clear");
+  const clearSize = vw < 500 ? 24 : 30;
   // A round on/off indicator with its label beside it; indent=1 for the sub-options
   const radio = (label, on, onTap, indent, color="#538d4e")=>React.createElement("div",{
       key:label,
@@ -509,7 +573,7 @@ function App() {
     },
     React.createElement("span",{style:{flexShrink:0,width:radioFont+5,height:radioFont+5,borderRadius:"50%",border:`2px solid ${on?color:"#818384"}`,display:"flex",alignItems:"center",justifyContent:"center",boxSizing:"border-box"}},
       on&&React.createElement("span",{style:{width:radioFont-3,height:radioFont-3,borderRadius:"50%",background:color}})),
-    React.createElement("span",{style:{fontSize:radioFont,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:on?"#fff":"#a0a0a0",lineHeight:1.15}},label)
+    React.createElement("span",{style:{fontSize:radioFont,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:on?"#fff":"#a0a0a0",lineHeight:1.15,whiteSpace:"nowrap"}},label)
   );
   const fnBtn = (bg,active)=>({...btnBase,background:bg,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:10,letterSpacing:1,textTransform:"uppercase",opacity:active?1:0.7,boxShadow:active?"0 0 0 2px #fff2":"none"});
 
@@ -528,8 +592,16 @@ function App() {
     setExcl(!!withExclude); setKbMode("find");
     updateLastLog("FIND, INCLUDE: ");
   };
+  // Tap ENCRYPT/DECRYPT: turn it on (Solitaire goes dark); tap again to turn it off
+  const startCrypt = (mode)=>{
+    if (kbMode===mode) { leaveCrypt(); rerender(); return; }
+    if (kbMode==="find") endFind();
+    cryptRef.current=""; setKbMode(mode);
+    updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
+    rerender();
+  };
   const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
-  const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
+  const startSolitaire = ()=>{ if(kbMode==="encrypt"||kbMode==="decrypt"){ cryptRef.current=""; setLog(prev=>prev.slice(0,-1)); } state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
   // Turning an option on mid-game: show it right away for the current position,
   // inserted just above the prompt line, without repeating the last guess
   const showNow = (what)=>{
@@ -558,7 +630,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.022":"WORDLE SOLITAIRE v.022",
+        state.mode==="myword"?"WORDLE MY WORD v.023":"WORDLE SOLITAIRE v.023",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -589,31 +661,36 @@ function App() {
       // Misc panel — right half, full to screen edge
       React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",minHeight:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
 
-        // Top row: square CLEAR button at top right
-        React.createElement("div",{style:{display:"flex",alignItems:"flex-start",gap:6}},
-          React.createElement("div",{style:{flex:1,minWidth:0}}),
-          React.createElement("button",{
-            onPointerDown:(e)=>{e.preventDefault();doClear();},
-            style:{...btnBase,flexShrink:0,height:clearSize,minWidth:clearSize,padding:"0 6px",borderRadius:5,background:"#2a2a2b",color:"#fff",fontSize:radioFont,letterSpacing:0.5,textTransform:"uppercase",border:"1px solid #3a3a3c"}
-          },"Clear")
-        ),
-
-        // Spacer
-        React.createElement("div",{style:{flex:1}}),
-
-        // Function buttons at bottom of misc panel
-        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
-          radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0),
-          radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 1),
-          radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 1),
-          devMode&&React.createElement("button",{
-            onPointerDown:(e)=>{e.preventDefault();startMyWord();},
-            style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
-          },"My Word"),
-          radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD"),
-          radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD"),
-          radio("Super", kbMode==="find"&&findSuper, ()=>startFind("super"), 1, "#378ADD")
-        )
+        // Options: stacked on iPhone; two columns on narrower iPad/Mac; three groups side by side when wide
+        (()=>{
+          const g=vw<500?2:3;
+          const col=(...kids)=>React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:g,minWidth:0}},...kids);
+          const solRow=React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}},
+            radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0), clearBtn);
+          const sol=radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0);
+          const rem=radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 1);
+          const sta=radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 1);
+          const myw=devMode&&React.createElement("button",{
+              onPointerDown:(e)=>{e.preventDefault();startMyWord();},
+              style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
+            },"My Word");
+          const fnd=radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD");
+          const fex=radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD");
+          const sup=radio("Super", kbMode==="find"&&findSuper, ()=>startFind("super"), 1, "#378ADD");
+          const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
+          const dec=radio("Decrypt", kbMode==="decrypt", ()=>startCrypt("decrypt"), 0, "#b59f3b");
+          if (vw<660) return col(solRow, rem, sta, myw, fnd, fex, sup, enc, dec);
+          // Two columns on iPad/Mac: SOLITAIRE then FIND on the left; ENCRYPT/DECRYPT level with
+          // FIND EXCLUDE/SUPER; CLEAR in the top-right corner
+          const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
+          const base=myw?1:0;   // dev-mode MY WORD adds a row
+          return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr auto",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
+            at(1,1,sol), at(2,1,rem), at(3,1,sta), myw&&at(4,1,myw),
+            at(4+base,1,fnd), at(5+base,1,fex), at(6+base,1,sup),
+            at(5+base,2,enc), at(6+base,2,dec),
+            at("1 / span 2",4,clearBtn,{alignSelf:"start"})
+          );
+        })()
       )
     ),
 
@@ -663,6 +740,7 @@ function App() {
         return React.createElement("div",{key:i,style:{
           color: line.startsWith("─")?"#538d4e":
                  (line.startsWith("Find:")||line.startsWith("FIND,"))?"#378ADD":
+                 (line.startsWith("ENCRYPT:")||line.startsWith("DECRYPT:"))?"#c9b458":
                  line.startsWith("My Word:")?"#b59f3b":
                  line.startsWith("Guess:")?"#e0e0e0":
                  line.startsWith("  ")?"#d0d0d0":"#b8b8b8",
@@ -678,9 +756,9 @@ function App() {
         React.createElement("div",{key:ri,style:{display:"flex",gap:keyGap}},
           ...row.map(key=>{
             const s=letterStates[key];
-            const bg=(kbMode==="myword"||state.pendingNew)?COLORS.key:  // plain keys while typing a secret word or while the finished board waits (FIND keeps the colors)
+            const bg=(kbMode==="myword"||kbMode==="encrypt"||kbMode==="decrypt"||state.pendingNew)?COLORS.key:  // plain keys while typing a secret word or while the finished board waits (FIND keeps the colors)
               s==="correct"?COLORS.correct:s==="present"?COLORS.present:s==="absent"?COLORS.absent:COLORS.key;
-            const handler=kbMode==="find"?processFindKey:kbMode==="myword"?processMyWordKey:processGameKey;
+            const handler=(kbMode==="encrypt"||kbMode==="decrypt")?(k=>processCryptKey(k,kbMode)):kbMode==="find"?processFindKey:kbMode==="myword"?processMyWordKey:processGameKey;
             return React.createElement("button",{
               key,
               onPointerDown:(e)=>{e.preventDefault();
