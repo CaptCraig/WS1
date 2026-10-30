@@ -98,13 +98,13 @@ function superRank(pool, remaining, topN){
     scored.push({word, exp:sumSq/n, score:sumSq/n-(isAns?1/n:0), isAns});
   }
   scored.sort((x,y)=>x.score-y.score);
-  const top=scored.slice(0,topN);
-  // if none of the top picks could be the answer, also offer the best one that could
-  if (!top.some(x=>x.isAns)) { const a=scored.find(x=>x.isAns); if (a) top.push(a); }
-  return top;
+  // Best word that could be the answer goes first, then the best other splitters (3 words in all)
+  const win=scored.find(x=>x.isAns);
+  const rest=scored.filter(x=>x!==win).slice(0, win ? topN-1 : topN);
+  return win ? [win, ...rest] : rest;
 }
 // Opening position never changes, so its result is stored rather than recomputed (~2 s on a phone)
-const SUPER_OPENING=[{word:"roate",exp:62.9,isAns:false},{word:"raise",exp:63.9,isAns:true},{word:"tiare",exp:64.2,isAns:false}];
+const SUPER_OPENING=[{word:"raise",exp:63.9,isAns:true},{word:"roate",exp:62.9,isAns:false},{word:"tiare",exp:64.2,isAns:false}];
 
 function computeLetterStates(guesses, answer) {
   const states={}, p={correct:3,present:2,absent:1,"":0};
@@ -139,17 +139,9 @@ const state = {
   answer:"", guesses:[], current:"",
   gameOver:false, showNewGame:false, usedWords:new Set(),
   mode:"solitaire", myWord:"",
-  showRemaining:true, showStats:true
+  showRemaining:false, showStats:false   // both start off every time the page loads
 };
-// Remember the two display options on this device (ignored if storage is unavailable)
-try {
-  const saved = JSON.parse(localStorage.getItem("ws1opts")||"{}");
-  if (typeof saved.showRemaining==="boolean") state.showRemaining = saved.showRemaining;
-  if (typeof saved.showStats==="boolean") state.showStats = saved.showStats;
-} catch(e) {}
-function saveOpts(){
-  try { localStorage.setItem("ws1opts", JSON.stringify({showRemaining:state.showRemaining, showStats:state.showStats})); } catch(e) {}
-}
+function saveOpts(){}   // options are no longer remembered between visits
 // Letter stats: for each letter, how many remaining words contain it (most common first)
 function letterStats(words){
   const counts={};
@@ -171,7 +163,6 @@ function initGame() {
 }
 initGame();
 
-const finder = { open:false, letters:"", results:[] };
 const modeSelector = { open:false };
 const myWordEntry = { open:false, letters:"" };
 
@@ -203,7 +194,17 @@ function App() {
 
   // Word lists are stored as one log entry and wrapped by the browser,
   // so they reflow automatically when the window is resized or rotated.
-  const packWords = (words) => [{type:"words", words}];
+  // Long lists are trimmed to a random sample (kept alphabetical) and labeled:
+  // 100 words on iPhone, 200 on iPad/Mac
+  const packWords = (words) => {
+    const cap = window.innerWidth < 500 ? 100 : 200;
+    if (words.length > cap) {
+      const pick = words.slice();
+      for (let i = pick.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pick[i], pick[j]] = [pick[j], pick[i]]; }
+      return [{type:"words", words: pick.slice(0, cap).sort(), note: "(random " + cap + " of " + words.length + ")"}];
+    }
+    return [{type:"words", words}];
+  };
 
   const addLog = useCallback((lines)=>{
     setLog(prev=>{
@@ -225,7 +226,6 @@ function App() {
     if(logRef.current) logRef.current.scrollTop=logRef.current.scrollHeight;
   },[log, screenSize]);  // also keep the newest line in view after resize/rotate
 
-  const showMsg = useCallback((msg)=>{ addLog(msg); },[addLog]);
 
   // Tile row as emoji string
   const tileRow = useCallback((guess, answer)=>{
@@ -273,7 +273,7 @@ function App() {
       rerender();
 
       // Show remaining words packed into lines dynamically
-      if (state.showRemaining && !isWin && !isLast && remaining.length>0 && remaining.length<=200) {
+      if (state.showRemaining && !isWin && !isLast && remaining.length>0) {
         addLog(packWords(remaining));
       }
       if (state.showStats && !isWin && !isLast && remaining.length>0) {
@@ -282,7 +282,6 @@ function App() {
 
       if (isWin||isLast) {
         state.gameOver=true;
-        const msgs=["Genius!","Magnificent!","Impressive!","Splendid!","Great!","Phew!"];
         setTimeout(()=>{
           state.showNewGame=true;
           const summary=["","─── Game Summary ───",
@@ -457,7 +456,6 @@ function App() {
 
   // Grid block total height
   const gridH = 6 * (tileH + tileGap) + tileGap;
-  const gridW = 5 * (tileW + tileGap) + tileGap;
 
   // Keyboard sizing — scale with vw
   // Keyboard: fixed small keys guaranteed to fit on iPhone
@@ -499,8 +497,6 @@ function App() {
     : "max(4px, calc(env(safe-area-inset-bottom, 0px) - 14px))";
   const kbH = 3 * keyH + 2 * keyGap + 3; // 3 rows + 2 gaps + 3px top padding (bottom padding is kbBottomPad)
 
-  // Misc panel width
-  const miscW = Math.max(100, Math.floor(vw * 0.22));
 
   const btnBase = {border:"none",cursor:"pointer",fontFamily:"'Montserrat',sans-serif",fontWeight:700,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"};
   const radioFont = vw < 500 ? 9 : 11;
@@ -534,7 +530,6 @@ function App() {
   };
   const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
   const startSolitaire = ()=>{ state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
-  const doRestart = ()=>{ initGame(); setFlipping({}); addLog(["─── Restart ───","Guess: "]); rerender(); };
   // Turning an option on mid-game: show it right away for the current position,
   // inserted just above the prompt line, without repeating the last guess
   const showNow = (what)=>{
@@ -543,7 +538,7 @@ function App() {
     if (remaining.length===0) return;
     let lines;
     if (what==="words") {
-      lines=["  "+remaining.length+" remaining", ...(remaining.length<=200?packWords(remaining):[])];
+      lines=["  "+remaining.length+" remaining", ...packWords(remaining)];
     } else {
       lines=[{type:"stats", items:letterStats(remaining)}];
     }
@@ -594,16 +589,9 @@ function App() {
       // Misc panel — right half, full to screen edge
       React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",minHeight:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
 
-        // Top row: mode + screen size on the left, square CLEAR button at top right
+        // Top row: square CLEAR button at top right
         React.createElement("div",{style:{display:"flex",alignItems:"flex-start",gap:6}},
-          React.createElement("div",{style:{flex:1,minWidth:0}},
-            React.createElement("div",{style:{fontSize:9,color:"#818384",letterSpacing:1,textTransform:"uppercase",marginBottom:2}},
-              kbMode==="find"?"● Find":kbMode==="myword"?"● My Word":"● "+state.mode
-            ),
-            React.createElement("div",{style:{fontSize:11,color:"#e0e0e0",letterSpacing:0.5,fontWeight:700}},
-              screenSize.w+"×"+screenSize.h
-            )
-          ),
+          React.createElement("div",{style:{flex:1,minWidth:0}}),
           React.createElement("button",{
             onPointerDown:(e)=>{e.preventDefault();doClear();},
             style:{...btnBase,flexShrink:0,height:clearSize,minWidth:clearSize,padding:"0 6px",borderRadius:5,background:"#2a2a2b",color:"#fff",fontSize:radioFont,letterSpacing:0.5,textTransform:"uppercase",border:"1px solid #3a3a3c"}
@@ -612,18 +600,6 @@ function App() {
 
         // Spacer
         React.createElement("div",{style:{flex:1}}),
-
-        // Restart/New — only when game over
-        showNewGame&&!state.pendingNew&&React.createElement("div",{style:{display:"flex",gap:4,marginBottom:4}},
-          React.createElement("button",{
-            onPointerDown:(e)=>{e.preventDefault();doRestart();},
-            style:{...btnBase,flex:1,padding:"5px 4px",background:"#538d4e",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
-          },"Restart"),
-          React.createElement("button",{
-            onPointerDown:(e)=>{e.preventDefault();startSolitaire();},
-            style:{...btnBase,flex:1,padding:"5px 4px",background:"#378ADD",color:"#fff",borderRadius:4,fontSize:9,letterSpacing:1,textTransform:"uppercase"}
-          },"New")
-        ),
 
         // Function buttons at bottom of misc panel
         React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:4}},
@@ -650,8 +626,7 @@ function App() {
             ...(line.items===null ? [React.createElement("span",{key:"w",style:{color:"#818384"}},"working…")]
               : line.items.length===0 ? [React.createElement("span",{key:"n",style:{color:"#818384"}},"no words fit")]
               : line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap",color:"#e0e0e0"}},
-                  t.word.toUpperCase()+(t.isAns?"*":""),
-                  React.createElement("span",{style:{color:"#818384"}}," ~"+(t.exp<10?t.exp.toFixed(1):Math.round(t.exp))))))
+                  t.word.toUpperCase())))   // first word is the best one that could be the answer
           );
         }
         if (line && line.type==="stats") {
@@ -661,7 +636,8 @@ function App() {
         if (line && line.type==="words") {
           // No commas: words laid out in aligned monospace columns that reflow with width
           return React.createElement("div",{key:i,style:{color:"#d0d0d0",paddingLeft:"2ch",display:"grid",gridTemplateColumns:"repeat(auto-fill, 5ch)",columnGap:"1.5ch"}},
-            ...line.words.map((w,j)=>React.createElement("span",{key:j},w)));
+            ...line.words.map((w,j)=>React.createElement("span",{key:j},w)),
+            ...(line.note ? [React.createElement("span",{key:"note",style:{gridColumn:"1 / -1",color:"#818384",fontStyle:"italic"}},line.note)] : []));
         }
         if (line && line.type==="tiles") {
           return React.createElement("div",{key:i,style:{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginBottom:3}},
