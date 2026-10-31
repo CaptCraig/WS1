@@ -80,10 +80,18 @@ function getTileColor(guess, answer, pos) {
 // ── SUPER: rank guesses by how well they split the remaining possible answers ──
 // Score = expected number of answers left after the guess (sum of group sizes² / total).
 // A guess that could itself be the answer gets a tiny edge, since it might win outright.
+const ANSWER_SET=new Set(ANSWERS);
 function superRank(pool, remaining, topN){
+  // Ranks each candidate guess by the EXPECTED NUMBER OF GUESSES TO FINISH:
+  //  - if it could be the answer, it wins outright 1 time in n;
+  //  - otherwise the colors split the remaining words into groups, and a group of k words
+  //    is assumed to take about f(k) more guesses (f(1)=1, f(2)=1.5, growing slowly after).
+  // Ties go to: a guaranteed split (no group bigger than 1), then a familiar word, then a possible answer.
+  if (remaining.length===1 && pool.includes(remaining[0])) return [{word:remaining[0],cost:1,worst:0,common:true,isAns:true}];  // only one left: just say it
   const enc=w=>{const r=new Uint8Array(5);for(let i=0;i<5;i++)r[i]=w.charCodeAt(i)-97;return r;};
   const R=remaining.map(enc), n=R.length, remSet=new Set(remaining);
   const counts=new Uint16Array(243), cnt=new Uint8Array(26), pat=new Uint8Array(5);
+  const f=k=>k<=1?1:1+0.5*Math.log2(k);
   const scored=[];
   for(const word of pool){
     const g=enc(word); counts.fill(0);
@@ -93,18 +101,17 @@ function superRank(pool, remaining, topN){
       for(let i=0;i<5;i++){ if(pat[i]!==2 && cnt[g[i]]>0){ pat[i]=1; cnt[g[i]]--; } }
       counts[((((pat[0]*3+pat[1])*3+pat[2])*3+pat[3])*3+pat[4])]++;
     }
-    let sumSq=0; for(let c=0;c<243;c++) sumSq+=counts[c]*counts[c];
+    let cost=0, worst=0;
+    for(let c=0;c<242;c++){ const k=counts[c]; if(k){ cost+=k/n*(1+f(k)); if(k>worst) worst=k; } }
+    if(counts[242]) cost+=1/n;            // all green: solved with this guess
     const isAns=remSet.has(word);
-    scored.push({word, exp:sumSq/n, score:sumSq/n-(isAns?1/n:0), isAns});
+    scored.push({word, cost, worst, common:ANSWER_SET.has(word), isAns});
   }
-  scored.sort((x,y)=>x.score-y.score);
-  // Best word that could be the answer goes first, then the best other splitters (3 words in all)
-  const win=scored.find(x=>x.isAns);
-  const rest=scored.filter(x=>x!==win).slice(0, win ? topN-1 : topN);
-  return win ? [win, ...rest] : rest;
+  scored.sort((x,y)=> (x.cost-y.cost>1e-9||y.cost-x.cost>1e-9) ? x.cost-y.cost
+                     : (x.worst-y.worst) || (y.common-x.common) || (y.isAns-x.isAns) || (x.word<y.word?-1:1));
+  return scored.slice(0,topN);
 }
-// Opening position never changes, so its result is stored rather than recomputed (~2 s on a phone)
-const SUPER_OPENING=[{word:"raise",exp:63.9,isAns:true},{word:"roate",exp:62.9,isAns:false},{word:"tiare",exp:64.2,isAns:false}];
+const SUPER_OPENING=[{word:"tarse"},{word:"tiare"},{word:"soare"}];   // precomputed with the ranking above
 
 // ── ENCRYPT / DECRYPT: a keyed cipher that maps any 5 letters to 5 letters, and back ──
 // Key: CRAIG and CIGAR (Craig's name and Wordle's first answer) plus the primes 2,3,5,7,11.
@@ -266,7 +273,6 @@ function App() {
   const processGameKey = useCallback((key)=>{
     if (state.gameOver && state.pendingNew && /^[a-z]$/.test(key)) {
       // First letter of the next puzzle: now clear the board and start it
-      if (state.mode==="myword") state.mode="solitaire";
       initGame(); setFlipping({});
     }
     if (state.gameOver) {
@@ -353,11 +359,17 @@ function App() {
   const [findSuper, setFindSuper] = useState(false);
   const findSuperRef = useRef(false);
   const setSuper = (v)=>{ findSuperRef.current=v; setFindSuper(v); };
-  const findPrompt = ()=>"FIND, INCLUDE: "+findRef.current.toUpperCase()+
-    (findPhaseRef.current==="exclude"
-      // iPhone: EXCLUDE on its own line, lined up under INCLUDE ("FIND, " is 6 characters)
-      ? (window.innerWidth<500 ? "\n      " : " ")+"EXCLUDE: "+excludeRef.current.toUpperCase()
-      : "");
+  // SUPER works with include and exclude letters; "SUPER FIND: ENTER" until letters are typed
+  const findPrompt = ()=>{
+    const sup=findSuperRef.current, ex=findPhaseRef.current==="exclude";
+    if (sup) return "SUPER FIND: ENTER";
+    const head=(sup?"SUPER FIND, ":"FIND, ");
+    return head+"INCLUDE: "+findRef.current.toUpperCase()+
+      (ex
+        // iPhone: EXCLUDE on its own line, lined up under INCLUDE
+        ? (window.innerWidth<500 ? "\n"+" ".repeat(head.length) : " ")+"EXCLUDE: "+excludeRef.current.toUpperCase()
+        : "");
+  };
   const endFind = ()=>{ findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; setExcl(false); setSuper(false); setKbMode("guess"); };
   const processFindKey = useCallback((key)=>{
     if (key==="Enter") {
@@ -372,14 +384,15 @@ function App() {
       const label="Find: "+inc.toUpperCase()+(exc?" − "+exc.toUpperCase():"");
       const showList = inc.length>=2;      // a SUPER run with 0–1 include letters skips the (huge) word list
       const lines=[];
-      if (showList) {
+      let superId=null;
+      if (doSuper) {                          // SUPER (exclusive): the prompt line becomes the Super Find line
+        superId=Date.now()+Math.random(); updateLastLog({type:"super", id:superId, items:null});
+      } else if (showList) {
         updateLastLog(results.length>0 ? label+" → "+results.length+" words found" : label+" → no words found");
         if (results.length>0) lines.push(...packWords(results));
       } else {
-        updateLastLog(inc||exc ? label+" → "+results.length+" words fit" : "Find: all words");
+        updateLastLog(label+" → "+results.length+" words fit");
       }
-      let superId=null;
-      if (doSuper) { superId=Date.now()+Math.random(); lines.push({type:"super", id:superId, items:null}); }
       addLog([...lines, "Guess: "+state.current]);
       endFind(); rerender();
       if (doSuper) {
@@ -396,6 +409,7 @@ function App() {
       }
       return;
     }
+    if (findSuperRef.current) return;         // SUPER takes no letters: just Enter
     if (key==="Backspace"){
       if (findPhaseRef.current==="exclude") {
         if (excludeRef.current.length===0) findPhaseRef.current="include";   // back up into the include letters
@@ -420,6 +434,7 @@ function App() {
   const myWordRef = useRef(state.myWord||"");
   // ENCRYPT / DECRYPT entry (prompt replaces the Guess line, like FIND)
   const cryptRef = useRef("");
+  const myWordNoteRef = useRef(false);
   const cryptPrompt = (mode)=>(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ")+cryptRef.current.toUpperCase();
   const leaveCrypt = ()=>{ cryptRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); };
   const processCryptKey = useCallback((key, mode)=>{
@@ -452,17 +467,18 @@ function App() {
       myWordRef.current="";
       setKbMode("guess");
       initGame(); setFlipping({});
-      addLog(["─── My Word Mode ───","Guess: "]);
+      updateLastLog("MY WORD: "+state.myWord.toUpperCase()+" ✓");
+      addLog(["─── My Word ───","Guess: "]);
       rerender(); return;
     }
     if (key==="Backspace"){ 
       myWordRef.current=myWordRef.current.slice(0,-1); 
-      updateLastLog("My Word: "+myWordRef.current.toUpperCase());
+      updateLastLog("MY WORD: "+myWordRef.current.toUpperCase());
       rerender(); return; 
     }
     if (/^[a-z]$/i.test(key)&&myWordRef.current.length<5){ 
       myWordRef.current+=key.toLowerCase(); 
-      updateLastLog("My Word: "+myWordRef.current.toUpperCase());
+      updateLastLog("MY WORD: "+myWordRef.current.toUpperCase());
       rerender(); 
     }
   },[addLog,updateLastLog,rerender]);
@@ -488,6 +504,7 @@ function App() {
       if(key==="Escape"){
         if(kbMode==="encrypt"||kbMode==="decrypt"){ leaveCrypt(); rerender(); return; }
         if(kbMode==="find") updateLastLog("Guess: "+state.current);
+        if(kbMode==="myword") updateLastLog("Guess: "+state.current);
         endFind(); myWordRef.current=""; rerender(); return; }
       if(kbMode==="encrypt"||kbMode==="decrypt") processCryptKey(key,kbMode);
       else if(kbMode==="find") processFindKey(key);
@@ -580,11 +597,18 @@ function App() {
   // FIND / FIND EXCLUDE: overwrite the Guess prompt with the Find prompt (no new line)
   const startFind = (withExclude)=>{
     if (withExclude==="super") {
-      if (kbMode==="find") { if (findPhaseRef.current==="include" || findPhaseRef.current==="exclude") setSuper(!findSuperRef.current); return; }
-      startFind(false); setSuper(true); return;
+      if (kbMode!=="find") startFind(false);
+      const on=!findSuperRef.current;
+      setSuper(on);
+      if (on) { setExcl(false); findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; }   // SUPER is exclusive
+      updateLastLog(findPrompt()); rerender(); return;
     }
     if (kbMode==="find") {
-      if (withExclude && findPhaseRef.current==="include") { setExcl(!findExcludeRef.current); return; }  // toggle exclude mid-entry
+      if (withExclude && findPhaseRef.current==="include") {                                 // toggle exclude mid-entry
+        const on=!findExcludeRef.current; setExcl(on);
+        if (on) setSuper(false);                                                             // FIND EXCLUDE turns SUPER off
+        updateLastLog(findPrompt()); rerender(); return;
+      }
       if (!withExclude) { updateLastLog("Guess: "+state.current); endFind(); rerender(); return; }        // tap FIND again: cancel
       return;
     }
@@ -600,8 +624,20 @@ function App() {
     updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
     rerender();
   };
-  const startMyWord = ()=>{ myWordRef.current=""; setKbMode("myword"); addLog("My Word: "); };
-  const startSolitaire = ()=>{ if(kbMode==="encrypt"||kbMode==="decrypt"){ cryptRef.current=""; setLog(prev=>prev.slice(0,-1)); } state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
+  // MYWORD: tap to enter a word that every game then uses until MYWORD is tapped off
+  const startMyWord = ()=>{
+    if (kbMode==="myword") { myWordRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); rerender(); return; }  // cancel entry
+    if (state.mode==="myword") { startSolitaire(); return; }                                                                         // turn it off
+    if (kbMode==="find") endFind();
+    if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
+    myWordRef.current=""; setKbMode("myword");
+    if (!myWordNoteRef.current) {             // first time only
+      myWordNoteRef.current=true;
+      setLog(prev=>[...prev.slice(0,-1), "Note: MYWORD keeps the same word for every game until MYWORD is turned off.", "MY WORD: "].slice(-MAX_LOG_LINES));
+    } else updateLastLog("MY WORD: ");
+    rerender();
+  };
+  const startSolitaire = ()=>{ if(kbMode==="encrypt"||kbMode==="decrypt"||kbMode==="myword"){ myWordRef.current=""; cryptRef.current=""; setLog(prev=>prev.slice(0,-1)); } state.mode="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
   // Turning an option on mid-game: show it right away for the current position,
   // inserted just above the prompt line, without repeating the last guess
   const showNow = (what)=>{
@@ -618,8 +654,8 @@ function App() {
   };
   // CLEAR: wipe the log and the board, and start a fresh Solitaire puzzle
   const doClear = ()=>{
-    state.mode="solitaire"; initGame(); setFlipping({});
-    endFind(); myWordRef.current="";
+    initGame(); setFlipping({});            // stays in My Word mode if that's on
+    endFind(); myWordRef.current=""; cryptRef.current="";
     setLog(["─── Log Cleared ───","─── New Game ───","Guess: "]);
     rerender();
   };
@@ -630,7 +666,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.023":"WORDLE SOLITAIRE v.023",
+        state.mode==="myword"?"WORDLE MY WORD v.024":"WORDLE SOLITAIRE v.024",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -639,7 +675,7 @@ function App() {
     React.createElement("div",{style:{display:"flex",flexDirection:"row",gap:0,padding:"6px 0 4px 0",flexShrink:0,alignItems:"flex-start",width:"100%"}},
 
       // 6-row grid — centered in left half
-      React.createElement("div",{style:{width:"50%",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+      React.createElement("div",{style:{width:vw<660?(5*(tileW+tileGap)+tileGap+16):"50%",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
         React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,${tileH}px)`,gridTemplateColumns:`repeat(5,${tileW}px)`,gap:tileGap}},
         ...Array.from({length:6}).map((_,rowIdx)=>{
           const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
@@ -670,24 +706,23 @@ function App() {
           const sol=radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0);
           const rem=radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 1);
           const sta=radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 1);
-          const myw=devMode&&React.createElement("button",{
-              onPointerDown:(e)=>{e.preventDefault();startMyWord();},
-              style:fnBtn(kbMode==="myword"?"#b59f3b":"#2a2a2b", kbMode==="myword")
-            },"My Word");
+          const myw=radio("Myword", kbMode==="myword"||state.mode==="myword", startMyWord, 0, "#b59f3b");
           const fnd=radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD");
           const fex=radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD");
           const sup=radio("Super", kbMode==="find"&&findSuper, ()=>startFind("super"), 1, "#378ADD");
           const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
-          const dec=radio("Decrypt", kbMode==="decrypt", ()=>startCrypt("decrypt"), 0, "#b59f3b");
-          if (vw<660) return col(solRow, rem, sta, myw, fnd, fex, sup, enc, dec);
-          // Two columns on iPad/Mac: SOLITAIRE then FIND on the left; ENCRYPT/DECRYPT level with
-          // FIND EXCLUDE/SUPER; CLEAR in the top-right corner
+          const dec=radio("Decrypt", kbMode==="decrypt"||!!state.decryptCode, ()=>startCrypt("decrypt"), 0, "#b59f3b");   // stays lit during a decrypted puzzle
           const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
-          const base=myw?1:0;   // dev-mode MY WORD adds a row
+          if (vw<660) return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr",columnGap:10,rowGap:g,alignItems:"center"}},
+            at(1,"1 / span 2",solRow), at(2,"1 / span 2",rem), at(3,"1 / span 2",sta),
+            at(4,1,fnd), at(5,1,fex), at(6,1,sup),
+            at(4,2,enc), at(5,2,dec), at(6,2,myw));
+          // Two columns on iPad/Mac: SOLITAIRE then FIND on the left; ENCRYPT, DECRYPT, MYWORD level with
+          // the FIND group; CLEAR in the top-right corner
           return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr auto",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
-            at(1,1,sol), at(2,1,rem), at(3,1,sta), myw&&at(4,1,myw),
-            at(4+base,1,fnd), at(5+base,1,fex), at(6+base,1,sup),
-            at(5+base,2,enc), at(6+base,2,dec),
+            at(1,1,sol), at(2,1,rem), at(3,1,sta),
+            at(4,1,fnd), at(5,1,fex), at(6,1,sup),
+            at(4,2,enc), at(5,2,dec), at(6,2,myw),
             at("1 / span 2",4,clearBtn,{alignSelf:"start"})
           );
         })()
@@ -739,9 +774,9 @@ function App() {
         }
         return React.createElement("div",{key:i,style:{
           color: line.startsWith("─")?"#538d4e":
-                 (line.startsWith("Find:")||line.startsWith("FIND,"))?"#378ADD":
+                 (line.startsWith("Find:")||line.startsWith("FIND,")||line.startsWith("SUPER FIND"))?"#378ADD":
                  (line.startsWith("ENCRYPT:")||line.startsWith("DECRYPT:"))?"#c9b458":
-                 line.startsWith("My Word:")?"#b59f3b":
+                 (line.startsWith("My Word:")||line.startsWith("MY WORD:")||line.startsWith("Note: MYWORD"))?"#c9b458":
                  line.startsWith("Guess:")?"#e0e0e0":
                  line.startsWith("  ")?"#d0d0d0":"#b8b8b8",
           fontWeight: line.startsWith("─")||line.startsWith("Guess:")?"700":"400",
