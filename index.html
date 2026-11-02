@@ -195,7 +195,7 @@ function initGame() {
     state.usedWords.add(state.answer);
   }
   state.guesses=[]; state.current="";
-  state.gameOver=false; state.showNewGame=false; state.pendingNew=false; state.decryptCode="";
+  state.gameOver=false; state.showNewGame=false; state.pendingNew=false; state.decryptCode=""; state.dailyCode=""; state.dailyDate="";
 }
 initGame();
 
@@ -322,8 +322,11 @@ function App() {
           const summary=["","─── Game Summary ───",
             ...state.guesses.map(g=>{ const tr=tileRow(g,state.answer); tr.prefix="  "; tr.suffix=""; return tr; }),
             isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`
-                 :(state.decryptCode?`Sorry, the decrypted word was ${state.answer.toUpperCase()}.`:`The word was ${state.answer.toUpperCase()}`),
+                 :(state.decryptCode?`Sorry, the decrypted word was ${state.answer.toUpperCase()}.`
+                   :state.dailyCode?`Sorry, today's daily word was ${state.answer.toUpperCase()}.`
+                   :`The word was ${state.answer.toUpperCase()}`),
             ...(isWin&&state.decryptCode?[`Congratulations, you have successfully decrypted ${state.decryptCode.toUpperCase()} to ${state.answer.toUpperCase()}!`]:[]),
+            ...(isWin&&state.dailyCode?[`Congratulations, you solved today's daily word: ${state.answer.toUpperCase()}!`]:[]),
             "─────────────────"
           ];
           // Prompt for the next puzzle, but leave the finished board showing
@@ -430,6 +433,8 @@ function App() {
     }
   },[addLog,updateLastLog,rerender]);
 
+  // Daily puzzle fetch state
+  const [dailyBusy, setDailyBusy] = useState(false);
   // My Word mode state
   const myWordRef = useRef(state.myWord||"");
   // ENCRYPT / DECRYPT entry (prompt replaces the Guess line, like FIND)
@@ -624,6 +629,45 @@ function App() {
     updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
     rerender();
   };
+  // DAILY: fetch the day's word (encrypted, in daily.json) and quietly start it as the answer.
+  // Fetched once per page load, then cached -- replaying the same daily puzzle is instant,
+  // with no re-fetch, every time DAILY is tapped again after that.
+  const dailyCacheRef = useRef(null);
+  const enterDaily = (plain, code, date)=>{
+    state.mode="solitaire"; initGame(); state.answer=plain;
+    state.dailyCode=code; state.dailyDate=date;
+    setFlipping({});
+    setLog(prev=>[...prev.slice(0,-1), `─── Daily Puzzle: ${date} ───`, "Guess: "]);
+    rerender();
+  };
+  const startDaily = ()=>{
+    if (dailyBusy) return;
+    if (kbMode==="find") endFind();
+    if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
+    if (kbMode==="myword") myWordRef.current="";
+    setKbMode("guess");
+    if (dailyCacheRef.current) {    // already fetched this page load: start it right back up
+      const {plain,code,date}=dailyCacheRef.current;
+      enterDaily(plain,code,date);
+      return;
+    }
+    setDailyBusy(true);
+    updateLastLog("Daily: fetching today's puzzle…"); rerender();
+    fetch("daily.json",{cache:"no-store"})
+      .then(r=>{ if(!r.ok) throw new Error("missing"); return r.json(); })
+      .then(data=>{
+        const plain=decryptWord(data.code);
+        if (!VALID_GUESSES.includes(plain)) throw new Error("bad code");
+        dailyCacheRef.current={plain, code:data.code, date:data.date};
+        setDailyBusy(false);
+        enterDaily(plain, data.code, data.date);
+      })
+      .catch(()=>{
+        setDailyBusy(false);
+        updateLastLog("Daily: not available yet — check back after 9am Eastern.");
+        rerender();
+      });
+  };
   // MYWORD: tap to enter a word that every game then uses until MYWORD is tapped off
   const startMyWord = ()=>{
     if (kbMode==="myword") { myWordRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); rerender(); return; }  // cancel entry
@@ -666,7 +710,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.mode==="myword"?"WORDLE MY WORD v.025":"WORDLE SOLITAIRE v.025",
+        state.mode==="myword"?"WORDLE MY WORD v.026":"WORDLE SOLITAIRE v.026",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -701,28 +745,39 @@ function App() {
         (()=>{
           const g=vw<500?2:3;
           const col=(...kids)=>React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:g,minWidth:0}},...kids);
+          // Exactly one of the four "ways to play" (Solitaire/Myword/Decrypt/Daily) is ever lit.
+          // Typing-in-progress wins first (so the button you're composing lights up right away);
+          // otherwise it's whichever puzzle is actually active; plain guessing falls back to Solitaire.
+          const activeRadio =
+            kbMode==="myword" ? "myword" :
+            kbMode==="decrypt" ? "decrypt" :
+            state.mode==="myword" ? "myword" :
+            state.dailyCode ? "daily" :
+            state.decryptCode ? "decrypt" :
+            (kbMode==="guess" ? "solitaire" : null);
           const solRow=React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}},
-            radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0), clearBtn);
-          const sol=radio("Solitaire", state.mode==="solitaire"&&kbMode==="guess", startSolitaire, 0);
+            radio("Solitaire", activeRadio==="solitaire", startSolitaire, 0), clearBtn);
+          const sol=radio("Solitaire", activeRadio==="solitaire", startSolitaire, 0);
           const rem=radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 1);
           const sta=radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 1);
-          const myw=radio("Myword", kbMode==="myword"||state.mode==="myword", startMyWord, 0, "#b59f3b");
+          const myw=radio("Myword", activeRadio==="myword", startMyWord, 0, "#b59f3b");
           const fnd=radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD");
           const fex=radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD");
           const sup=radio("Super", kbMode==="find"&&findSuper, ()=>startFind("super"), 1, "#378ADD");
           const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
-          const dec=radio("Decrypt", kbMode==="decrypt"||!!state.decryptCode, ()=>startCrypt("decrypt"), 0, "#b59f3b");   // stays lit during a decrypted puzzle
+          const dec=radio("Decrypt", activeRadio==="decrypt", ()=>startCrypt("decrypt"), 0, "#b59f3b");   // stays lit during a decrypted puzzle
+          const dly=radio(dailyBusy?"Daily…":"Daily", activeRadio==="daily", startDaily, 0, "#538d4e");   // stays lit during today's puzzle
           const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
           if (vw<660) return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr",columnGap:10,rowGap:g,alignItems:"center"}},
             at(1,"1 / span 2",solRow), at(2,"1 / span 2",rem), at(3,"1 / span 2",sta),
             at(4,1,fnd), at(5,1,fex), at(6,1,sup),
-            at(4,2,enc), at(5,2,dec), at(6,2,myw));
-          // Two columns on iPad/Mac: SOLITAIRE then FIND on the left; ENCRYPT, DECRYPT, MYWORD level with
+            at(4,2,enc), at(5,2,dec), at(6,2,myw), at(7,2,dly));
+          // Two columns on iPad/Mac: SOLITAIRE then FIND on the left; ENCRYPT, DECRYPT, MYWORD, DAILY level with
           // the FIND group; CLEAR in the top-right corner
           return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr auto",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
             at(1,1,sol), at(2,1,rem), at(3,1,sta),
             at(4,1,fnd), at(5,1,fex), at(6,1,sup),
-            at(4,2,enc), at(5,2,dec), at(6,2,myw),
+            at(4,2,enc), at(5,2,dec), at(6,2,myw), at(7,2,dly),
             at("1 / span 2",4,clearBtn,{alignSelf:"start"})
           );
         })()
