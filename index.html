@@ -298,6 +298,8 @@ const state = {
 };
 function saveOpts(){}   // options are no longer remembered between visits
 // Letter stats: for each letter, how many remaining words contain it (most common first)
+// Show stats line: how many words are left, then each letter's count
+function statsLine(words){ return {type:"stats", count:words.length, items:letterStats(words)}; }
 function letterStats(words){
   const counts={};
   words.forEach(w=>new Set(w).forEach(ch=>{ counts[ch]=(counts[ch]||0)+1; }));
@@ -317,11 +319,17 @@ function initGame() {
     state.answer = pool[Math.floor(Math.random()*pool.length)];
     state.usedWords.add(state.answer);
   }
-  state.guesses=[]; state.current="";
+  state.guesses=[]; state.current=""; state.round=(state.round||0)+1;
   state.gameOver=false; state.showNewGame=false; state.pendingNew=false;
 }
 initGame();
 // "─── New Game ───", naming the game when it isn't plain Solitaire
+// Output from Show remaining words, Show stats, Find and Super find is tagged with what made it
+// and the position it belongs to (puzzle round + guesses so far), so its lit button can take it
+// back again -- but only for the current position, never anything from before the last guess.
+const tagNow = (tag)=>({tag, gen:state.guesses.length, round:state.round});
+const tagged = (lines, t)=>lines.map(l=> typeof l==="string" ? {type:"text", text:l, ...t} : {...l, ...t});
+const isHere = (l, tag)=> l && l.tag===tag && l.gen===state.guesses.length && l.round===state.round;
 const GAME_NAMES = { solitaire:"", daily:"Daily", myword:"My Word", decrypt:"Decrypt" };
 const newGameLine = ()=> GAME_NAMES[state.game] ? `─── New Game: ${GAME_NAMES[state.game]} ───` : "─── New Game ───";
 
@@ -429,16 +437,16 @@ function App() {
       const isWin=word===state.answer, isLast=state.guesses.length>=6;
       const tr = tileRow(word,state.answer);
       tr.prefix = "Guess:  "+word.toUpperCase()+" → ";
-      tr.suffix = isWin?"✓":(state.showRemaining?remaining.length+" remaining":"");
+      tr.suffix = isWin?"✓":"";
       updateLastLog(tr);
       rerender();
 
       // Show remaining words packed into lines dynamically
       if (state.showRemaining && !isWin && !isLast && remaining.length>0) {
-        addLog(packWords(remaining));
+        addLog(tagged(["  "+remaining.length+" remaining", ...packWords(remaining)], tagNow("rem")));
       }
       if (state.showStats && !isWin && !isLast && remaining.length>0) {
-        addLog([{type:"stats", items:letterStats(remaining)}]);
+        addLog(tagged([statsLine(remaining)], tagNow("stats")));
       }
 
       if (isWin||isLast) {
@@ -478,67 +486,40 @@ function App() {
     }
   },[rerender,addLog,updateLastLog,tileRow]);
 
-  // Find mode state: include letters, then (optionally) exclude letters, all on one prompt line
+  // Find: include letters, Enter, then exclude letters ("EXCLUDE?"), Enter runs it
   const findRef = useRef("");          // include letters
   const excludeRef = useRef("");       // exclude letters
   const findPhaseRef = useRef("include");
-  const [findExclude, setFindExclude] = useState(false);
-  const findExcludeRef = useRef(false);
-  const setExcl = (v)=>{ findExcludeRef.current=v; setFindExclude(v); };
-  const [findSuper, setFindSuper] = useState(false);
-  const findSuperRef = useRef(false);
-  const setSuper = (v)=>{ findSuperRef.current=v; setFindSuper(v); };
-  // SUPER works with include and exclude letters; "SUPER FIND: ENTER" until letters are typed
   const findPrompt = ()=>{
-    const sup=findSuperRef.current, ex=findPhaseRef.current==="exclude";
-    if (sup) return "SUPER FIND: ENTER";
-    const head=(sup?"SUPER FIND, ":"FIND, ");
+    const head="FIND, ", ex=findPhaseRef.current==="exclude";
     return head+"INCLUDE: "+findRef.current.toUpperCase()+
       (ex
         // iPhone: EXCLUDE on its own line, lined up under INCLUDE
-        ? (window.innerWidth<500 ? "\n"+" ".repeat(head.length) : " ")+"EXCLUDE: "+excludeRef.current.toUpperCase()
+        ? (window.innerWidth<500 ? "\n"+" ".repeat(head.length) : " ")+"EXCLUDE? "+excludeRef.current.toUpperCase()
         : "");
   };
-  const endFind = ()=>{ findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; setExcl(false); setSuper(false); setKbMode("guess"); };
+  const endFind = ()=>{ findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; setKbMode("guess"); };
   const processFindKey = useCallback((key)=>{
     if (key==="Enter") {
-      if (findPhaseRef.current==="include") {
-        if (findRef.current.length<2 && !findSuperRef.current) return;   // SUPER can run with no include letters
-        if (findExcludeRef.current) {          // move on to the exclude letters, same line
-          findPhaseRef.current="exclude"; updateLastLog(findPrompt()); rerender(); return;
-        }
+      if (findPhaseRef.current==="include") {           // on to the exclude letters
+        findPhaseRef.current="exclude"; updateLastLog(findPrompt()); rerender(); return;
       }
-      const inc=findRef.current, exc=excludeRef.current, doSuper=findSuperRef.current;
+      const inc=findRef.current, exc=excludeRef.current;
+      if (!inc && !exc) { updateLastLog("Guess: "+state.current); endFind(); rerender(); return; }   // nothing asked: cancel
       const results=VALID_GUESSES.filter(w=>inc.split("").every(l=>w.includes(l)) && !exc.split("").some(l=>w.includes(l))).sort();
       const label="Find: "+inc.toUpperCase()+(exc?" − "+exc.toUpperCase():"");
-      const showList = inc.length>=2;      // a SUPER run with 0–1 include letters skips the (huge) word list
-      const lines=[];
-      let superId=null;
-      if (doSuper) {                          // SUPER (exclusive): the prompt line becomes the Super Find line
-        superId=Date.now()+Math.random(); updateLastLog({type:"super", id:superId, items:null});
-      } else if (showList) {
-        updateLastLog(results.length>0 ? label+" → "+results.length+" words found" : label+" → no words found");
-        if (results.length>0) lines.push(...packWords(results));
+      const t=tagNow("find");
+      const showList = inc.length>=2;      // 0-1 include letters: just the count (the list would be huge)
+      if (showList) {
+        updateLastLog({type:"text", text: results.length>0 ? label+" → "+results.length+" words found" : label+" → no words found", ...t});
+        addLog([...tagged(results.length>0?packWords(results):[], t), "Guess: "+state.current]);
       } else {
-        updateLastLog(label+" → "+results.length+" words fit");
+        updateLastLog({type:"text", text: label+" → "+results.length+" words fit", ...t});
+        addLog("Guess: "+state.current);
       }
-      addLog([...lines, "Guess: "+state.current]);
       endFind(); rerender();
-      if (doSuper) {
-        // answers still possible right now (a finished board counts as a fresh start)
-        const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
-        const remaining = fresh ? ANSWERS : filterWords(ANSWERS,state.guesses,state.answer);
-        setTimeout(()=>{     // let "working…" paint first
-          let items;
-          if (results.length===0 || remaining.length===0) items=[];
-          else if (fresh && !inc && !exc) items=SUPER_OPENING;
-          else items=superBest(results, remaining, fresh ? 6 : 6-state.guesses.length);
-          setLog(prev=>prev.map(l=>l&&l.id===superId?{...l,items,remaining:remaining.length}:l));
-        },30);
-      }
       return;
     }
-    if (findSuperRef.current) return;         // SUPER takes no letters: just Enter
     if (key==="Backspace"){
       if (findPhaseRef.current==="exclude") {
         if (excludeRef.current.length===0) findPhaseRef.current="include";   // back up into the include letters
@@ -552,7 +533,7 @@ function App() {
         if (findRef.current.includes(key) || excludeRef.current.includes(key)) return;
         excludeRef.current+=key;
       } else {
-        if (findRef.current.length>=8) return;
+        if (findRef.current.length>=8 || findRef.current.includes(key)) return;
         findRef.current+=key;
       }
       updateLastLog(findPrompt()); rerender();
@@ -725,32 +706,51 @@ function App() {
   );
   const fnBtn = (bg,active)=>({...btnBase,background:bg,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:10,letterSpacing:1,textTransform:"uppercase",opacity:active?1:0.7,boxShadow:active?"0 0 0 2px #fff2":"none"});
 
-  // FIND / FIND EXCLUDE: overwrite the Guess prompt with the Find prompt (no new line)
-  const startFind = (withExclude)=>{
-    if (withExclude==="super") {
-      if (kbMode!=="find") startFind(false);
-      const on=!findSuperRef.current;
-      setSuper(on);
-      if (on) { setExcl(false); findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; }   // SUPER is exclusive
-      updateLastLog(findPrompt()); rerender(); return;
-    }
-    if (kbMode==="find") {
-      if (withExclude && findPhaseRef.current==="include") {                                 // toggle exclude mid-entry
-        const on=!findExcludeRef.current; setExcl(on);
-        if (on) setSuper(false);                                                             // FIND EXCLUDE turns SUPER off
-        updateLastLog(findPrompt()); rerender(); return;
-      }
-      if (!withExclude) { updateLastLog("Guess: "+state.current); endFind(); rerender(); return; }        // tap FIND again: cancel
-      return;
-    }
+  // take back this position's output from one utility
+  const erase = (tag)=>setLog(prev=>prev.filter(l=>!isHere(l,tag)));
+  const hasHere = (tag)=>log.some(l=>isHere(l,tag));
+  // leave any letter entry (Find, Encrypt/Decrypt, Myword) and put the Guess prompt back
+  const leaveEntry = ()=>{
+    if (kbMode==="guess") return;
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
-    setExcl(!!withExclude); setKbMode("find");
-    updateLastLog("FIND, INCLUDE: ");
+    cryptRef.current=""; myWordRef.current="";
+    setKbMode("guess"); updateLastLog("Guess: "+state.current);
+  };
+  // FIND: tap to type letters (the prompt replaces the Guess line); tap while typing to cancel;
+  // after it runs it stays lit -- tap it to take the results back
+  const startFind = ()=>{
+    if (kbMode==="find") { leaveEntry(); rerender(); return; }
+    if (hasHere("find")) { erase("find"); rerender(); return; }
+    leaveEntry();
+    findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
+    setKbMode("find"); updateLastLog("FIND, INCLUDE: "); rerender();
+  };
+  // SUPER FIND: tap and the best guesses for this position appear right away; tap again to take them back
+  const startSuper = ()=>{
+    if (hasHere("super")) { erase("super"); rerender(); return; }
+    leaveEntry();
+    const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
+    const remaining = fresh ? ANSWERS : filterWords(ANSWERS,state.guesses,state.answer);
+    const id=Date.now()+Math.random(), t=tagNow("super");
+    setLog(prev=>[...prev.slice(0,-1), {type:"super", id, items:null, ...t}, prev[prev.length-1]].slice(-MAX_LOG_LINES));
+    rerender();
+    setTimeout(()=>{     // let "working…" paint first
+      const items = remaining.length===0 ? [] : fresh ? SUPER_OPENING : superBest(VALID_GUESSES, remaining, 6-state.guesses.length);
+      setLog(prev=>prev.map(l=>l&&l.id===id?{...l,items}:l));
+    },30);
+  };
+  // SHOW REMAINING WORDS / SHOW STATS: on shows them now and after every guess;
+  // off also takes back what they showed for this position
+  const toggleShow = (tag)=>{
+    const key = tag==="rem" ? "showRemaining" : "showStats";
+    state[key]=!state[key];
+    if (state[key]) showNow(tag); else erase(tag);
+    rerender();
   };
   // Tap ENCRYPT/DECRYPT: turn it on (Solitaire goes dark); tap again to turn it off
   const startCrypt = (mode)=>{
     if (kbMode===mode) { leaveCrypt(); rerender(); return; }
-    if (kbMode==="find") endFind();
+    if (kbMode==="find"||kbMode==="myword") { findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; myWordRef.current=""; }
     cryptRef.current=""; setKbMode(mode);
     updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
     rerender();
@@ -813,12 +813,7 @@ function App() {
     if (state.gameOver || state.pendingNew || state.guesses.length===0) return;
     const remaining=filterWords(ANSWERS,state.guesses,state.answer);
     if (remaining.length===0) return;
-    let lines;
-    if (what==="words") {
-      lines=["  "+remaining.length+" remaining", ...packWords(remaining)];
-    } else {
-      lines=[{type:"stats", items:letterStats(remaining)}];
-    }
+    const lines = tagged(what==="rem" ? ["  "+remaining.length+" remaining", ...packWords(remaining)] : [statsLine(remaining)], tagNow(what));
     setLog(prev=>[...prev.slice(0,-1), ...lines, prev[prev.length-1]].slice(-MAX_LOG_LINES));
   };
   // CLEAR: wipe the log and the board, and start a fresh puzzle in the same game
@@ -835,7 +830,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.028":"WORDLE SOLITAIRE v.028",
+        state.game==="myword"?"WORDLE MY WORD v.029":"WORDLE SOLITAIRE v.029",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -878,11 +873,11 @@ function App() {
           const myw=radio("Myword", activeGame==="myword", startMyWord, 0, "#b59f3b");
           const dec=radio("Decrypt", activeGame==="decrypt", ()=>startCrypt("decrypt"), 0, "#b59f3b");
           // UTILITIES (work on top of whatever game is selected)
-          const rem=radio("Show remaining words", state.showRemaining, ()=>{ state.showRemaining=!state.showRemaining; saveOpts(); if (state.showRemaining) showNow("words"); rerender(); }, 0);
-          const sta=radio("Show stats", state.showStats, ()=>{ state.showStats=!state.showStats; saveOpts(); if (state.showStats) showNow("stats"); rerender(); }, 0);
-          const fnd=radio("Find", kbMode==="find", ()=>startFind(false), 0, "#378ADD");
-          const fex=radio("Find exclude", kbMode==="find"&&findExclude, ()=>startFind(true), 1, "#378ADD");
-          const sup=radio("Super", kbMode==="find"&&findSuper, ()=>startFind("super"), 1, "#378ADD");
+          // Lit = on, or showing something for this position; tapping a lit one takes it back
+          const rem=radio("Show remaining words", state.showRemaining, ()=>toggleShow("rem"), 0);
+          const sta=radio("Show stats", state.showStats, ()=>toggleShow("stats"), 0);
+          const fnd=radio("Find", kbMode==="find"||hasHere("find"), startFind, 0, "#378ADD");
+          const sup=radio("Super find", hasHere("super"), startSuper, 0, "#378ADD");
           const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
           const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
           const divider=at(3,"1 / -1",null,{borderTop:"1px solid #3a3a3c",margin:(vw<500?"2px 0":"3px 0")});
@@ -893,18 +888,17 @@ function App() {
             divider,
             at(4,"1 / span 2",rem),
             at(5,1,sta), at(5,2,clearBtn,{justifySelf:"end"}),
-            at(6,1,fnd), at(6,2,enc),
-            at(7,1,fex),
-            at(8,1,sup));
+            at(6,1,fnd), at(6,2,sup),
+            at(7,1,enc));
           // iPad landscape / Mac: games in two columns at the top; below the line, the show options on the
-          // left, the FIND group beside them, ENCRYPT under the show options; CLEAR on the right
+          // left, FIND and SUPER FIND beside them, ENCRYPT under the show options; CLEAR on the right
           return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr auto",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
             at(1,1,sol), at(1,2,dly),
             at(2,1,myw), at(2,2,dec),
             divider,
             at(4,1,rem), at(4,2,fnd),
-            at(5,1,sta), at(5,2,fex),
-            at(6,1,enc), at(6,2,sup),
+            at(5,1,sta), at(5,2,sup),
+            at(6,1,enc),
             at("4 / span 2",4,clearBtn,{alignSelf:"start"})
           );
         })()
@@ -914,6 +908,7 @@ function App() {
     // Scrollable log — fills remaining space, padded so content clears fixed keyboard
     React.createElement("div",{ref:logRef,style:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"none",margin:"0 8px",marginBottom:`calc(${kbH + 5}px + ${kbBottomPad})`,background:"#1a1a1b",border:"1px solid #3a3a3c",borderRadius:6,padding:"8px 10px 20px 10px",fontFamily:"'Courier New',monospace",fontSize:logFont,lineHeight:1.4,minHeight:0}},
       log.map((line,i)=>{
+        if (line && line.type==="text") line=line.text;      // tagged (erasable) plain lines
         if (line && line.type==="super") {
           return React.createElement("div",{key:i,style:{color:"#378ADD",display:"flex",flexWrap:"wrap",columnGap:"1.5ch",alignItems:"baseline"}},
             React.createElement("span",{style:{fontWeight:700,whiteSpace:"nowrap"}},"Super Find:"),
@@ -925,6 +920,7 @@ function App() {
         }
         if (line && line.type==="stats") {
           return React.createElement("div",{key:i,style:{color:"#8fb3d9",paddingLeft:"2ch",display:"flex",flexWrap:"wrap",columnGap:"1.5ch"}},
+            ...(line.count!=null ? [React.createElement("span",{key:"n",style:{whiteSpace:"nowrap",color:"#d0d0d0"}},line.count+" remaining:")] : []),
             ...line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap"}},t)));
         }
         if (line && line.type==="words") {
