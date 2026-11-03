@@ -501,8 +501,13 @@ function App() {
   const endFind = ()=>{ findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; setKbMode("guess"); };
   const processFindKey = useCallback((key)=>{
     if (key==="Enter") {
-      if (findPhaseRef.current==="include") {           // on to the exclude letters
-        findPhaseRef.current="exclude"; updateLastLog(findPrompt()); rerender(); return;
+      if (findPhaseRef.current==="include") {
+        const inc=findRef.current;
+        if (inc && !VALID_GUESSES.some(w=>inc.split("").every(l=>w.includes(l)))) {   // nothing has all of them: ask again
+          updateLastLog("Find: "+inc.toUpperCase()+" → no words found");
+          findRef.current=""; addLog("FIND, INCLUDE: "); rerender(); return;
+        }
+        findPhaseRef.current="exclude"; updateLastLog(findPrompt()); rerender(); return;   // on to the exclude letters
       }
       const inc=findRef.current, exc=excludeRef.current;
       if (!inc && !exc) { updateLastLog("Guess: "+state.current); endFind(); rerender(); return; }   // nothing asked: cancel
@@ -688,12 +693,6 @@ function App() {
 
   const btnBase = {border:"none",cursor:"pointer",fontFamily:"'Montserrat',sans-serif",fontWeight:700,WebkitTapHighlightColor:"transparent",touchAction:"manipulation"};
   const radioFont = vw < 500 ? 9 : 11;
-  const clearBtn = React.createElement("button",{
-      key:"clear",
-      onPointerDown:(e)=>{e.preventDefault();doClear();},
-      style:{...btnBase,flexShrink:0,height:(vw < 500 ? 24 : 30),minWidth:(vw < 500 ? 24 : 30),padding:"0 6px",borderRadius:5,background:"#2a2a2b",color:"#fff",fontSize:radioFont,letterSpacing:0.5,textTransform:"uppercase",border:"1px solid #3a3a3c"}
-    },"Clear");
-  const clearSize = vw < 500 ? 24 : 30;
   // A round on/off indicator with its label beside it; indent=1 for the sub-options
   const radio = (label, on, onTap, indent, color="#538d4e")=>React.createElement("div",{
       key:label,
@@ -716,11 +715,10 @@ function App() {
     cryptRef.current=""; myWordRef.current="";
     setKbMode("guess"); updateLastLog("Guess: "+state.current);
   };
-  // FIND: tap to type letters (the prompt replaces the Guess line); tap while typing to cancel;
-  // after it runs it stays lit -- tap it to take the results back
+  // FIND: tap to type letters (the prompt replaces the Guess line); tap while typing to cancel.
+  // When it has shown its words it goes off, ready for a guess.
   const startFind = ()=>{
     if (kbMode==="find") { leaveEntry(); rerender(); return; }
-    if (hasHere("find")) { erase("find"); rerender(); return; }
     leaveEntry();
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
     setKbMode("find"); updateLastLog("FIND, INCLUDE: "); rerender();
@@ -749,6 +747,7 @@ function App() {
   };
   // Tap ENCRYPT/DECRYPT: turn it on (Solitaire goes dark); tap again to turn it off
   const startCrypt = (mode)=>{
+    if (mode==="decrypt" && (kbMode==="decrypt" || (state.game==="decrypt" && kbMode!=="myword"))) { startSolitaire(); return; }   // Decrypt is lit: off, Solitaire on
     if (kbMode===mode) { leaveCrypt(); rerender(); return; }
     if (kbMode==="find"||kbMode==="myword") { findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; myWordRef.current=""; }
     cryptRef.current=""; setKbMode(mode);
@@ -758,9 +757,14 @@ function App() {
   // DAILY: fetch the day's word (encrypted, in daily.json) and quietly start it as the answer.
   // Fetched once per page load, then cached -- replaying the same daily puzzle is instant,
   // with no re-fetch, every time DAILY is tapped again after that.
-  const dailyCacheRef = useRef(null);
-  const enterDaily = (plain, code, date)=>{
-    state.game="daily"; state.dailyWord=plain;
+  // The latest daily word this browser has seen (only the encrypted code is kept), so DAILY
+  // always has a word: if today's isn't up yet, or the download fails, it plays the latest one.
+  const DAILY_KEY="ws1-daily-latest";
+  const readDaily=()=>{ try{ const d=JSON.parse(localStorage.getItem(DAILY_KEY)||"null"); return d&&d.code&&d.date?d:null; }catch(e){ return null; } };
+  const keepDaily=(d)=>{ try{ localStorage.setItem(DAILY_KEY, JSON.stringify({code:d.code, date:d.date})); }catch(e){} };
+  const dailyCacheRef = useRef(null);   // {code, date} from this page load
+  const enterDaily = (code, date)=>{
+    state.game="daily"; state.dailyWord=decryptWord(code);
     state.dailyCode=code; state.dailyDate=date; initGame();
     setFlipping({});
     setLog(prev=>[...prev.slice(0,-1), `─── Daily Puzzle: ${date} ───`, "Guess: "]);
@@ -768,35 +772,39 @@ function App() {
   };
   const startDaily = ()=>{
     if (dailyBusy) return;
+    if (state.game==="daily" && kbMode!=="myword" && kbMode!=="decrypt") { startSolitaire(); return; }   // Daily is lit: off, Solitaire on
     if (kbMode==="find") endFind();
     if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
     if (kbMode==="myword") myWordRef.current="";
     setKbMode("guess");
-    if (dailyCacheRef.current) {    // already fetched this page load: start it right back up
-      const {plain,code,date}=dailyCacheRef.current;
-      enterDaily(plain,code,date);
-      return;
-    }
+    const valid=d=>d && VALID_GUESSES.includes(decryptWord(d.code));
+    const newer=(a,b)=> !b ? a : !a ? b : (a.date>=b.date ? a : b);
+    const have=newer(valid(dailyCacheRef.current)?dailyCacheRef.current:null, valid(readDaily())?readDaily():null);
+    const todayET=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date());   // NYT's day
+    if (have && have.date>=todayET) { enterDaily(have.code, have.date); return; }   // already have today's: start right away
     setDailyBusy(true);
     updateLastLog("Daily: fetching today's puzzle…"); rerender();
     fetch("daily.json",{cache:"no-store"})
       .then(r=>{ if(!r.ok) throw new Error("missing"); return r.json(); })
       .then(data=>{
-        const plain=decryptWord(data.code);
-        if (!VALID_GUESSES.includes(plain)) throw new Error("bad code");
-        dailyCacheRef.current={plain, code:data.code, date:data.date};
+        const got=valid(data) ? {code:data.code, date:data.date} : null;
+        const use=newer(got, have);
+        if (!use) throw new Error("none");
+        dailyCacheRef.current=use; keepDaily(use);
         setDailyBusy(false);
-        enterDaily(plain, data.code, data.date);
+        enterDaily(use.code, use.date);
       })
       .catch(()=>{
         setDailyBusy(false);
-        updateLastLog("Daily: not available yet — check back after 9am Eastern.");
+        if (have) { enterDaily(have.code, have.date); return; }   // couldn't check: play the latest one we have
+        updateLastLog("Daily: no daily word yet — check back after 9am Eastern.");
         rerender();
       });
   };
-  // MYWORD: tap to enter a word that every game then uses until another game is picked
+  // MYWORD: tap to enter a word that every game then uses until another game is picked.
+  // Tapping any lit game (Daily, Myword, Decrypt) turns it off and goes back to Solitaire.
   const startMyWord = ()=>{
-    if (kbMode==="myword") { myWordRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); rerender(); return; }  // cancel entry
+    if (kbMode==="myword" || (state.game==="myword" && kbMode!=="decrypt")) { startSolitaire(); return; }   // Myword is lit: off, Solitaire on
     if (kbMode==="find") endFind();
     if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
     myWordRef.current=""; setKbMode("myword");
@@ -816,13 +824,6 @@ function App() {
     const lines = tagged(what==="rem" ? ["  "+remaining.length+" remaining", ...packWords(remaining)] : [statsLine(remaining)], tagNow(what));
     setLog(prev=>[...prev.slice(0,-1), ...lines, prev[prev.length-1]].slice(-MAX_LOG_LINES));
   };
-  // CLEAR: wipe the log and the board, and start a fresh puzzle in the same game
-  const doClear = ()=>{
-    initGame(); setFlipping({});            // the selected game never changes here
-    endFind(); myWordRef.current=""; cryptRef.current=""; setKbMode("guess");
-    setLog(["─── Log Cleared ───",newGameLine(),"Guess: "]);
-    rerender();
-  };
 
   // Layout: full viewport flex column, keyboard pinned to bottom
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden",background:"#121213",color:"#fff",fontFamily:"'Montserrat',sans-serif"}},
@@ -830,7 +831,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.030":"WORDLE SOLITAIRE v.030",
+        state.game==="myword"?"WORDLE MY WORD v.033":"WORDLE SOLITAIRE v.033",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       )
     ),
@@ -876,7 +877,7 @@ function App() {
           // Lit = on, or showing something for this position; tapping a lit one takes it back
           const rem=radio("Show remaining words", state.showRemaining, ()=>toggleShow("rem"), 0);
           const sta=radio("Show stats", state.showStats, ()=>toggleShow("stats"), 0);
-          const fnd=radio("Find", kbMode==="find"||hasHere("find"), startFind, 0, "#378ADD");
+          const fnd=radio("Find", kbMode==="find", startFind, 0, "#378ADD");
           const sup=radio("Super find", hasHere("super"), startSuper, 0, "#378ADD");
           const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
           const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
@@ -887,19 +888,18 @@ function App() {
             at(2,1,myw), at(2,2,dec),
             divider,
             at(4,"1 / span 2",rem),
-            at(5,1,sta), at(5,2,clearBtn,{justifySelf:"end"}),
+            at(5,1,sta),
             at(6,1,fnd), at(6,2,sup),
             at(7,1,enc));
           // iPad landscape / Mac: games in two columns at the top; below the line, the show options on the
-          // left, FIND and SUPER FIND beside them, ENCRYPT under the show options; CLEAR on the right
-          return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr auto",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
+          // left, FIND and SUPER FIND beside them, ENCRYPT under the show options
+          return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
             at(1,1,sol), at(1,2,dly),
             at(2,1,myw), at(2,2,dec),
             divider,
             at(4,1,rem), at(4,2,fnd),
             at(5,1,sta), at(5,2,sup),
-            at(6,1,enc),
-            at("4 / span 2",4,clearBtn,{alignSelf:"start"})
+            at(6,1,enc)
           );
         })()
       )
@@ -919,9 +919,11 @@ function App() {
           );
         }
         if (line && line.type==="stats") {
-          return React.createElement("div",{key:i,style:{color:"#8fb3d9",paddingLeft:"2ch",display:"flex",flexWrap:"wrap",columnGap:"1.5ch"}},
-            ...(line.count!=null ? [React.createElement("span",{key:"n",style:{whiteSpace:"nowrap",color:"#d0d0d0"}},line.count+" remaining:")] : []),
-            ...line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap"}},t)));
+          // "N remaining" at the left edge, then the letter counts indented on their own line
+          return React.createElement("div",{key:i},
+            ...(line.count!=null ? [React.createElement("div",{key:"n",style:{color:"#d0d0d0"}},line.count+" remaining")] : []),
+            React.createElement("div",{key:"s",style:{color:"#8fb3d9",paddingLeft:"2ch",display:"flex",flexWrap:"wrap",columnGap:"1.5ch"}},
+              ...line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap"}},t))));
         }
         if (line && line.type==="words") {
           // No commas: words laid out in aligned monospace columns that reflow with width
