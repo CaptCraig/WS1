@@ -270,6 +270,12 @@ function computeLetterStates(guesses, answer) {
   return states;
 }
 
+// The answer list for the current game. If the answer isn't on the list -- a Myword word, a decrypted
+// code, or a Daily word NYT picked from outside it -- it joins the list for this game only, so the
+// remaining words, the stats and Super find always include it.
+function answerPool(){
+  return (state.answer && state.game!=="solitaire" && !ANSWER_SET.has(state.answer)) ? [...ANSWERS, state.answer].sort() : ANSWERS;
+}
 function filterWords(list, guesses, answer) {
   if (guesses.length === 0) return list;
   return list.filter(word => {
@@ -433,7 +439,7 @@ function App() {
       const rowIdx=state.guesses.length, word=state.current;
       state.guesses=[...state.guesses,word]; state.current="";
       setFlipping(f=>({...f,[rowIdx+"_"+word]:true}));
-      const remaining=filterWords(ANSWERS,state.guesses,state.answer);
+      const remaining=filterWords(answerPool(),state.guesses,state.answer);
       const isWin=word===state.answer, isLast=state.guesses.length>=6;
       const tr = tileRow(word,state.answer);
       tr.prefix = "Guess:  "+word.toUpperCase()+" → ";
@@ -708,6 +714,8 @@ function App() {
   // take back this position's output from one utility
   const erase = (tag)=>setLog(prev=>prev.filter(l=>!isHere(l,tag)));
   const hasHere = (tag)=>log.some(l=>isHere(l,tag));
+  // Super find goes off when Find or Encrypt is turned on: its words stay in the log, as after a guess
+  const keepSuper = ()=>setLog(prev=>prev.map(l=>isHere(l,"super")?{...l,tag:"super-kept"}:l));
   // leave any letter entry (Find, Encrypt/Decrypt, Myword) and put the Guess prompt back
   const leaveEntry = ()=>{
     if (kbMode==="guess") return;
@@ -719,7 +727,7 @@ function App() {
   // When it has shown its words it goes off, ready for a guess.
   const startFind = ()=>{
     if (kbMode==="find") { leaveEntry(); rerender(); return; }
-    leaveEntry();
+    leaveEntry(); keepSuper();
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
     setKbMode("find"); updateLastLog("FIND, INCLUDE: "); rerender();
   };
@@ -728,7 +736,7 @@ function App() {
     if (hasHere("super")) { erase("super"); rerender(); return; }
     leaveEntry();
     const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
-    const remaining = fresh ? ANSWERS : filterWords(ANSWERS,state.guesses,state.answer);
+    const remaining = fresh ? answerPool() : filterWords(answerPool(),state.guesses,state.answer);
     const id=Date.now()+Math.random(), t=tagNow("super");
     setLog(prev=>[...prev.slice(0,-1), {type:"super", id, items:null, ...t}, prev[prev.length-1]].slice(-MAX_LOG_LINES));
     rerender();
@@ -750,6 +758,7 @@ function App() {
     if (mode==="decrypt" && (kbMode==="decrypt" || (state.game==="decrypt" && kbMode!=="myword"))) { startSolitaire(); return; }   // Decrypt is lit: off, Solitaire on
     if (kbMode===mode) { leaveCrypt(); rerender(); return; }
     if (kbMode==="find"||kbMode==="myword") { findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; myWordRef.current=""; }
+    if (mode==="encrypt") keepSuper();
     cryptRef.current=""; setKbMode(mode);
     updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
     rerender();
@@ -763,8 +772,41 @@ function App() {
   const readDaily=()=>{ try{ const d=JSON.parse(localStorage.getItem(DAILY_KEY)||"null"); return d&&d.code&&d.date?d:null; }catch(e){ return null; } };
   const keepDaily=(d)=>{ try{ localStorage.setItem(DAILY_KEY, JSON.stringify({code:d.code, date:d.date})); }catch(e){} };
   const dailyCacheRef = useRef(null);   // {code, date} from this page load
+  // When the page loads, and whenever you come back to the tab, look at the site's copy of WS1. Words newly added to the answer list join this page's list quietly; any
+  // other change shows "New version -- reload". A newer daily word is kept for the next DAILY tap.
+  const [newVersion, setNewVersion] = useState(false);
+  useEffect(()=>{
+    const ANS_RE=/const\s+ANSWERS\s*=\s*(\[[^\]]*\])/;
+    let base=null, busy=false;
+    const check=()=>{
+      if (busy || document.visibilityState!=="visible") return;
+      busy=true;
+      fetch("index.html",{cache:"no-store"})
+        .then(r=>r.ok?r.text():Promise.reject())
+        .then(t=>{
+          const m=t.match(ANS_RE);
+          if (m) {
+            let added=false;
+            for (const w of JSON.parse(m[1])) if (!ANSWER_SET.has(w)) { ANSWER_SET.add(w); ANSWERS.push(w); added=true; }
+            if (added) ANSWERS.sort();
+          }
+          const rest=t.replace(ANS_RE,"");                  // everything except the answer list
+          if (base===null) base=rest; else if (rest!==base) setNewVersion(true);
+        })
+        .catch(()=>{})
+        .then(()=>fetch("daily.json",{cache:"no-store"}))
+        .then(r=>r&&r.ok?r.json():null)
+        .then(d=>{ if (d&&d.date&&/^[a-z]{5}$/.test(d.code||"")) { const have=readDaily(); if (!have||d.date>have.date) keepDaily(d); } })
+        .catch(()=>{})
+        .finally(()=>{ busy=false; });
+    };
+    check();
+    document.addEventListener("visibilitychange", check);
+    return ()=>document.removeEventListener("visibilitychange", check);
+  },[]);
   const enterDaily = (code, date)=>{
     state.game="daily"; state.dailyWord=decryptWord(code);
+    if (!VALID_GUESSES.includes(state.dailyWord)) VALID_GUESSES.push(state.dailyWord);   // NYT's word is always playable
     state.dailyCode=code; state.dailyDate=date; initGame();
     setFlipping({});
     setLog(prev=>[...prev.slice(0,-1), `─── Daily Puzzle: ${date} ───`, "Guess: "]);
@@ -777,7 +819,7 @@ function App() {
     if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
     if (kbMode==="myword") myWordRef.current="";
     setKbMode("guess");
-    const valid=d=>d && VALID_GUESSES.includes(decryptWord(d.code));
+    const valid=d=>d && /^[a-z]{5}$/.test(d.code||"") && /^[a-z]{5}$/.test(decryptWord(d.code));
     const newer=(a,b)=> !b ? a : !a ? b : (a.date>=b.date ? a : b);
     const have=newer(valid(dailyCacheRef.current)?dailyCacheRef.current:null, valid(readDaily())?readDaily():null);
     const todayET=new Intl.DateTimeFormat("en-CA",{timeZone:"America/New_York"}).format(new Date());   // NYT's day
@@ -818,8 +860,9 @@ function App() {
   // Turning an option on mid-game: show it right away for the current position,
   // inserted just above the prompt line, without repeating the last guess
   const showNow = (what)=>{
-    if (state.gameOver || state.pendingNew || state.guesses.length===0) return;
-    const remaining=filterWords(ANSWERS,state.guesses,state.answer);
+    // before the first guess (or while a finished board waits) every answer is still possible
+    const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
+    const remaining = fresh ? answerPool() : filterWords(answerPool(),state.guesses,state.answer);
     if (remaining.length===0) return;
     const lines = tagged(what==="rem" ? ["  "+remaining.length+" remaining", ...packWords(remaining)] : [statsLine(remaining)], tagNow(what));
     setLog(prev=>[...prev.slice(0,-1), ...lines, prev[prev.length-1]].slice(-MAX_LOG_LINES));
@@ -831,9 +874,12 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.033":"WORDLE SOLITAIRE v.033",
+        state.game==="myword"?"WORDLE MY WORD v.034":"WORDLE SOLITAIRE v.034",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
-      )
+      ),
+      newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
+        style:{marginLeft:10,verticalAlign:"middle",fontSize:10,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:"#121213",background:"#c9b458",border:0,borderRadius:4,padding:"3px 7px",cursor:"pointer"}},
+        "New version — reload")
     ),
 
     // Top row: grid + misc panel
@@ -871,8 +917,8 @@ function App() {
           const activeGame = kbMode==="myword" ? "myword" : kbMode==="decrypt" ? "decrypt" : state.game;
           const sol=radio("Solitaire", activeGame==="solitaire", startSolitaire, 0);
           const dly=radio(dailyBusy?"Daily…":"Daily", activeGame==="daily", startDaily, 0);
-          const myw=radio("Myword", activeGame==="myword", startMyWord, 0, "#b59f3b");
-          const dec=radio("Decrypt", activeGame==="decrypt", ()=>startCrypt("decrypt"), 0, "#b59f3b");
+          const myw=radio("Myword", activeGame==="myword", startMyWord, 0);
+          const dec=radio("Decrypt", activeGame==="decrypt", ()=>startCrypt("decrypt"), 0);
           // UTILITIES (work on top of whatever game is selected)
           // Lit = on, or showing something for this position; tapping a lit one takes it back
           const rem=radio("Show remaining words", state.showRemaining, ()=>toggleShow("rem"), 0);
