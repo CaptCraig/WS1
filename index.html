@@ -663,12 +663,18 @@ function App() {
   // iPad reports itself like a Mac in Safari, but has a touch screen
   const isTablet = vw >= 600 && (navigator.maxTouchPoints || 0) > 0;
   // Phones: fill the width. iPad/Mac: spread across ~72% of the screen (wider, not taller).
+  // Mac (no touch screen): keys about a third smaller than iPad's, leaving more room for the log
+  const isDesktop = vw >= 600 && !isTablet;
   const keyW = vw < 600
     ? Math.min(60, Math.max(22, Math.floor((vw - 20) / 11)))
-    : Math.min(96, Math.max(60, Math.floor(vw * (isTablet ? 0.62 : 0.72) / 10.6)));
-  const keyGap = vw >= 600 ? 5 : 3;
+    : isDesktop
+      ? Math.min(64, Math.max(40, Math.floor(vw * 0.48 / 10.6)))
+      : Math.min(96, Math.max(60, Math.floor(vw * 0.62 / 10.6)));
+  const keyGap = vw >= 600 ? (isDesktop ? 4 : 5) : 3;
   // Height scales with width but is capped by screen height so landscape iPad/Mac keep room for the log
-  const keyH = Math.min(Math.floor(keyW * 1.25), Math.max(41, Math.floor(vh * 0.065)));
+  const keyH = isDesktop
+    ? Math.min(Math.floor(keyW * 1.25), Math.max(32, Math.floor(vh * 0.044)))
+    : Math.min(Math.floor(keyW * 1.25), Math.max(41, Math.floor(vh * 0.065)));
   const keyFontSize = Math.min(26, Math.floor(keyH * 0.48));
   const wideW = Math.floor(keyW * 1.55);
   // "ENTER" is ~4 em wide in Montserrat bold; size it to fit the wide key with a little margin
@@ -874,7 +880,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.034":"WORDLE SOLITAIRE v.034",
+        state.game==="myword"?"WORDLE MY WORD v.035":"WORDLE SOLITAIRE v.035",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
