@@ -39,6 +39,21 @@
     }
 
     .row-shake { animation: shake 0.5s ease; }
+    /* Win: the winning row hops left to right, then the whole board glows */
+    @keyframes hop {
+      0%,100% { transform: translateY(0); }
+      35%     { transform: translateY(-32%); }
+      60%     { transform: translateY(4%); }
+      80%     { transform: translateY(-7%); }
+    }
+    @keyframes glow {
+      0%,100% { box-shadow: 0 0 0 0 rgba(106,200,96,0); filter: brightness(1); }
+      45%     { box-shadow: 0 0 12px 3px rgba(106,200,96,0.95); filter: brightness(1.7); }
+    }
+    .board-shake { animation: shake 0.6s ease; }
+    @media (prefers-reduced-motion: reduce) {
+      .board-shake { animation: none; }
+    }
 
     * { user-select: none; -webkit-user-select: none; }
     * { user-select: none; -webkit-user-select: none; }
@@ -300,12 +315,13 @@ const state = {
   gameOver:false, showNewGame:false, usedWords:new Set(),
   game:"solitaire",          // solitaire | daily | myword | decrypt -- stays until another game is picked
   myWord:"", decryptCode:"", dailyWord:"", dailyCode:"", dailyDate:"",
-  showRemaining:false, showStats:false   // both start off every time the page loads
+  showRemaining:false,   // starts off every time the page loads
+  peeked:false           // this game, were the remaining words or Super find seen? (small red check at the end)
 };
 function saveOpts(){}   // options are no longer remembered between visits
 // Letter stats: for each letter, how many remaining words contain it (most common first)
-// Show stats line: how many words are left, then each letter's count
-function statsLine(words){ return {type:"stats", count:words.length, items:letterStats(words)}; }
+// Letter counts, shown under the remaining words
+function statsLine(words){ return {type:"stats", items:letterStats(words)}; }
 function letterStats(words){
   const counts={};
   words.forEach(w=>new Set(w).forEach(ch=>{ counts[ch]=(counts[ch]||0)+1; }));
@@ -326,23 +342,24 @@ function initGame() {
     state.usedWords.add(state.answer);
   }
   state.guesses=[]; state.current=""; state.round=(state.round||0)+1;
-  state.gameOver=false; state.showNewGame=false; state.pendingNew=false;
+  state.gameOver=false; state.showNewGame=false; state.pendingNew=false; state.peeked=false;
 }
 initGame();
 // "─── New Game ───", naming the game when it isn't plain Solitaire
-// Output from Show remaining words, Show stats, Find and Super find is tagged with what made it
+// Output from Show remaining words, Find and Super find is tagged with what made it
 // and the position it belongs to (puzzle round + guesses so far), so its lit button can take it
 // back again -- but only for the current position, never anything from before the last guess.
 const tagNow = (tag)=>({tag, gen:state.guesses.length, round:state.round});
 const tagged = (lines, t)=>lines.map(l=> typeof l==="string" ? {type:"text", text:l, ...t} : {...l, ...t});
 const isHere = (l, tag)=> l && l.tag===tag && l.gen===state.guesses.length && l.round===state.round;
+const FINDER_NOTE = "Note: Most serious Wordle players keep a word finder handy. You still pick the guess; the computer just does the lookup.";
 const GAME_NAMES = { solitaire:"", daily:"Daily", myword:"My Word", decrypt:"Decrypt" };
 const newGameLine = ()=> GAME_NAMES[state.game] ? `─── New Game: ${GAME_NAMES[state.game]} ───` : "─── New Game ───";
 
 const modeSelector = { open:false };
 const myWordEntry = { open:false, letters:"" };
 
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useLayoutEffect, useCallback, useRef } = React;
 
 const MAX_LOG_LINES = 314;
 const TILE_COLORS = { correct:"#538d4e", present:"#b59f3b", absent:"#3a3a3c" };
@@ -353,6 +370,9 @@ function App() {
   const rerender = useCallback(()=>forceRender(n=>n+1),[]);
   const [shaking, setShaking] = useState(false);
   const [flipping, setFlipping] = useState({});
+  // End-of-game show on the board: {round, win, row, flashes}
+  const reduceMotion = typeof window!=="undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [celebrate, setCelebrate] = useState(null);
   const [devMode, setDevMode] = useState(false);
   const [screenSize, setScreenSize] = useState({w:window.innerWidth,h:window.innerHeight});
 
@@ -372,6 +392,8 @@ function App() {
   // so they reflow automatically when the window is resized or rotated.
   // Long lists are trimmed to a random sample (kept alphabetical) and labeled:
   // 100 words on iPhone, 200 on iPad/Mac
+  // Show remaining words: the count, the words, then how many of them contain each letter
+  const remainingLines = (words)=>["  "+words.length+" remaining", ...packWords(words), statsLine(words)];
   const packWords = (words) => {
     const cap = window.innerWidth < 500 ? 100 : 200;
     if (words.length > cap) {
@@ -449,22 +471,26 @@ function App() {
 
       // Show remaining words packed into lines dynamically
       if (state.showRemaining && !isWin && !isLast && remaining.length>0) {
-        addLog(tagged(["  "+remaining.length+" remaining", ...packWords(remaining)], tagNow("rem")));
-      }
-      if (state.showStats && !isWin && !isLast && remaining.length>0) {
-        addLog(tagged([statsLine(remaining)], tagNow("stats")));
+        state.peeked=true;
+        addLog(tagged(remainingLines(remaining), tagNow("rem")));
       }
 
       if (isWin||isLast) {
         state.gameOver=true;
+        // once the last tile has flipped: a win hops and glows (more flashes for fewer guesses); a loss shakes
+        const round=state.round, flashes=Math.max(1, 7-state.guesses.length);
+        setTimeout(()=>{
+          setCelebrate({round, win:isWin, row:rowIdx, flashes});
+          setTimeout(()=>setCelebrate(c=>c&&c.round===round?null:c), isWin ? 1000+flashes*380 : 700);
+        },1750);
         setTimeout(()=>{
           state.showNewGame=true;
           const summary=["","─── Game Summary ───",
             ...state.guesses.map(g=>{ const tr=tileRow(g,state.answer); tr.prefix="  "; tr.suffix=""; return tr; }),
-            isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`
+            {type:"result", peeked:state.peeked, text: isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`
                  :(state.game==="decrypt"?`Sorry, the decrypted word was ${state.answer.toUpperCase()}.`
                    :state.game==="daily"?`Sorry, today's daily word was ${state.answer.toUpperCase()}.`
-                   :`The word was ${state.answer.toUpperCase()}`),
+                   :`The word was ${state.answer.toUpperCase()}`)},
             ...(isWin&&state.game==="decrypt"?[`Congratulations, you have successfully decrypted ${state.decryptCode.toUpperCase()} to ${state.answer.toUpperCase()}!`]:[]),
             ...(isWin&&state.game==="daily"?[`Congratulations, you solved today's daily word: ${state.answer.toUpperCase()}!`]:[]),
             "─────────────────"
@@ -558,6 +584,7 @@ function App() {
   // ENCRYPT / DECRYPT entry (prompt replaces the Guess line, like FIND)
   const cryptRef = useRef("");
   const myWordNoteRef = useRef(false);
+  const finderNoteRef = useRef(false);
   const cryptPrompt = (mode)=>(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ")+cryptRef.current.toUpperCase();
   const leaveCrypt = ()=>{ cryptRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); };
   const processCryptKey = useCallback((key, mode)=>{
@@ -643,15 +670,27 @@ function App() {
   // Responsive sizing — breakpoint 1400px
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  const panelRef = useRef(null);
+  const [panelH, setPanelH] = useState(0);
+  useLayoutEffect(()=>{
+    if (!panelRef.current) return;
+    const h=Math.round(panelRef.current.getBoundingClientRect().height);
+    if (h!==panelH) setPanelH(h);
+  });
   const isWide = k => k==="Enter"||k==="⌫";
   // Log text: 22px on iPad/Mac, a bit smaller on phones
   const logFont = vw < 500 ? 17 : 22;
 
   // Tile: width fills 70% of left half, height stays compact
-  const tileGap = 4;
+  // Phones: the board is squeezed to end level with the bottom of the button panel, so the log gets
+  // the room (the panel's own height is measured after each render)
+  const isPhone = vw < 600;
+  const tileGap = isPhone ? 3 : 4;
   const tileW = Math.max(22, Math.floor((vw * 0.50 * 0.70 - tileGap * 6) / 5));
-  const tileH = Math.max(22, Math.floor(Math.min(36, vw/11) * 0.70));
-  const tileFontSize = Math.max(10, Math.floor(tileH * 0.52));
+  const tileH = isPhone && panelH
+    ? Math.max(14, Math.floor((panelH - 5 * tileGap) / 6))
+    : Math.max(22, Math.floor(Math.min(36, vw/11) * 0.70));
+  const tileFontSize = Math.max(9, Math.floor(Math.min(tileW, tileH) * (isPhone ? 0.62 : 0.52)));
 
   // Grid block total height
   const gridH = 6 * (tileH + tileGap) + tileGap;
@@ -674,7 +713,9 @@ function App() {
   // Height scales with width but is capped by screen height so landscape iPad/Mac keep room for the log
   const keyH = isDesktop
     ? Math.min(Math.floor(keyW * 1.25), Math.max(32, Math.floor(vh * 0.044)))
-    : Math.min(Math.floor(keyW * 1.25), Math.max(41, Math.floor(vh * 0.065)));
+    : vw < 600
+      ? Math.min(Math.floor(keyW * 1.55), Math.max(41, Math.floor(vh * 0.066)))   // phones: taller keys, easier to hit
+      : Math.min(Math.floor(keyW * 1.25), Math.max(41, Math.floor(vh * 0.065)));
   const keyFontSize = Math.min(26, Math.floor(keyH * 0.48));
   const wideW = Math.floor(keyW * 1.55);
   // "ENTER" is ~4 em wide in Montserrat bold; size it to fit the wide key with a little margin
@@ -735,13 +776,19 @@ function App() {
     if (kbMode==="find") { leaveEntry(); rerender(); return; }
     leaveEntry(); keepSuper();
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
-    setKbMode("find"); updateLastLog("FIND, INCLUDE: "); rerender();
+    setKbMode("find");
+    if (!finderNoteRef.current) {             // first time only
+      finderNoteRef.current=true;
+      setLog(prev=>[...prev.slice(0,-1), FINDER_NOTE, "FIND, INCLUDE: "].slice(-MAX_LOG_LINES));
+    } else updateLastLog("FIND, INCLUDE: ");
+    rerender();
   };
   // SUPER FIND: tap and the best guesses for this position appear right away; tap again to take them back
   const startSuper = ()=>{
     if (hasHere("super")) { erase("super"); rerender(); return; }
     leaveEntry();
     const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
+    if (!state.gameOver && !state.pendingNew) state.peeked=true;
     const remaining = fresh ? answerPool() : filterWords(answerPool(),state.guesses,state.answer);
     const id=Date.now()+Math.random(), t=tagNow("super");
     setLog(prev=>[...prev.slice(0,-1), {type:"super", id, items:null, ...t}, prev[prev.length-1]].slice(-MAX_LOG_LINES));
@@ -751,12 +798,11 @@ function App() {
       setLog(prev=>prev.map(l=>l&&l.id===id?{...l,items}:l));
     },30);
   };
-  // SHOW REMAINING WORDS / SHOW STATS: on shows them now and after every guess;
-  // off also takes back what they showed for this position
-  const toggleShow = (tag)=>{
-    const key = tag==="rem" ? "showRemaining" : "showStats";
-    state[key]=!state[key];
-    if (state[key]) showNow(tag); else erase(tag);
+  // SHOW REMAINING WORDS: on shows them now and after every guess (with the letter counts);
+  // off also takes back what it showed for this position
+  const toggleShow = ()=>{
+    state.showRemaining=!state.showRemaining;
+    if (state.showRemaining) showNow(); else erase("rem");
     rerender();
   };
   // Tap ENCRYPT/DECRYPT: turn it on (Solitaire goes dark); tap again to turn it off
@@ -865,12 +911,13 @@ function App() {
   const startSolitaire = ()=>{ if(kbMode==="encrypt"||kbMode==="decrypt"||kbMode==="myword"){ myWordRef.current=""; cryptRef.current=""; setLog(prev=>prev.slice(0,-1)); } state.game="solitaire"; initGame(); setFlipping({}); setKbMode("guess"); addLog(["─── Wordle Solitaire ───","Guess: "]); rerender(); };
   // Turning an option on mid-game: show it right away for the current position,
   // inserted just above the prompt line, without repeating the last guess
-  const showNow = (what)=>{
+  const showNow = ()=>{
     // before the first guess (or while a finished board waits) every answer is still possible
     const fresh = state.gameOver || state.pendingNew || state.guesses.length===0;
     const remaining = fresh ? answerPool() : filterWords(answerPool(),state.guesses,state.answer);
     if (remaining.length===0) return;
-    const lines = tagged(what==="rem" ? ["  "+remaining.length+" remaining", ...packWords(remaining)] : [statsLine(remaining)], tagNow(what));
+    if (!fresh) state.peeked=true;
+    const lines = tagged(remainingLines(remaining), tagNow("rem"));
     setLog(prev=>[...prev.slice(0,-1), ...lines, prev[prev.length-1]].slice(-MAX_LOG_LINES));
   };
 
@@ -880,7 +927,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.035":"WORDLE SOLITAIRE v.035",
+        state.game==="myword"?"WORDLE MY WORD v.036":"WORDLE SOLITAIRE v.036",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
@@ -893,7 +940,7 @@ function App() {
 
       // 6-row grid — centered in left half
       React.createElement("div",{style:{width:vw<660?(5*(tileW+tileGap)+tileGap+16):"50%",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
-        React.createElement("div",{style:{display:"grid",gridTemplateRows:`repeat(6,${tileH}px)`,gridTemplateColumns:`repeat(5,${tileW}px)`,gap:tileGap}},
+        React.createElement("div",{className:(celebrate&&celebrate.round===state.round&&!celebrate.win)?"board-shake":"",style:{display:"grid",gridTemplateRows:`repeat(6,${tileH}px)`,gridTemplateColumns:`repeat(5,${tileW}px)`,gap:tileGap}},
         ...Array.from({length:6}).map((_,rowIdx)=>{
           const guess=guesses[rowIdx], isCurrent=rowIdx===guesses.length;
           return Array.from({length:5}).map((_,colIdx)=>{
@@ -903,7 +950,11 @@ function App() {
             const border=isRevealed?bg:(letter?COLORS.borderFilled:COLORS.border);
             const delay=isRevealed?colIdx*0.3:0;
             const flipKey=rowIdx+"_"+(guess||"");
-            const anim=isRevealed&&flipping[flipKey]?`flip 0.5s ease ${delay}s forwards`:"none";
+            let anim=isRevealed&&flipping[flipKey]?`flip 0.5s ease ${delay}s forwards`:"none";
+            if (celebrate && celebrate.round===state.round && celebrate.win && !reduceMotion) {
+              const glow=`glow 0.38s ease ${0.95}s ${celebrate.flashes}`;
+              anim = rowIdx===celebrate.row ? `hop 0.5s ease ${colIdx*0.09}s, ${glow}` : glow;
+            }
             const isShaking=isCurrent&&shaking;
             return React.createElement("div",{key:`${rowIdx}-${colIdx}`,className:isShaking?"row-shake":"",style:{width:tileW,height:tileH,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${border}`,backgroundColor:bg,color:"#fff",fontWeight:800,fontSize:tileFontSize,textTransform:"uppercase",borderRadius:3,transition:`background-color 0.1s ${delay}s,border-color 0.1s ${delay}s`,animation:anim,userSelect:"none"}},letter.toUpperCase());
           });
@@ -912,7 +963,7 @@ function App() {
       ),
 
       // Misc panel — right half, full to screen edge
-      React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",minHeight:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
+      React.createElement("div",{ref:panelRef,style:{flex:1,display:"flex",flexDirection:"column",minHeight:isPhone?undefined:gridH,borderLeft:"1px solid #3a3a3c",borderTop:"1px solid #3a3a3c",borderBottom:"1px solid #3a3a3c",borderRight:"none",borderRadius:"6px 0 0 6px",background:"#1a1a1b",padding:"6px",gap:4,boxSizing:"border-box"}},
 
         // Options: stacked on iPhone; two columns on narrower iPad/Mac; three groups side by side when wide
         (()=>{
@@ -927,32 +978,22 @@ function App() {
           const dec=radio("Decrypt", activeGame==="decrypt", ()=>startCrypt("decrypt"), 0);
           // UTILITIES (work on top of whatever game is selected)
           // Lit = on, or showing something for this position; tapping a lit one takes it back
-          const rem=radio("Show remaining words", state.showRemaining, ()=>toggleShow("rem"), 0);
-          const sta=radio("Show stats", state.showStats, ()=>toggleShow("stats"), 0);
-          const fnd=radio("Find", kbMode==="find", startFind, 0, "#378ADD");
+          const rem=radio("Show remaining words", state.showRemaining, toggleShow, 0);
+          const fnd=radio("Simple word finder tool", kbMode==="find", startFind, 0, "#378ADD");
           const sup=radio("Super find", hasHere("super"), startSuper, 0, "#378ADD");
           const enc=radio("Encrypt", kbMode==="encrypt", ()=>startCrypt("encrypt"), 0, "#b59f3b");
           const at=(r,c,el,extra={})=>React.createElement("div",{style:{gridRow:r,gridColumn:c,minWidth:0,...extra}},el);
-          const divider=at(3,"1 / -1",null,{borderTop:"1px solid #3a3a3c",margin:(vw<500?"2px 0":"3px 0")});
-          // iPhone and iPad portrait: stacked, two narrow columns
-          if (vw<900) return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr",columnGap:vw<500?10:24,rowGap:g,alignItems:"center"}},
+          const line=(r)=>at(r,"1 / -1",null,{borderTop:"1px solid #3a3a3c",margin:(vw<500?"2px 0":"3px 0")});
+          // Games on top; a line; Show remaining words, then Super find and Encrypt; a line;
+          // the Simple word finder tool. Same arrangement on every screen.
+          return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr",columnGap:vw<500?10:vw<900?24:30,rowGap:g,alignItems:"center"}},
             at(1,1,sol), at(1,2,dly),
             at(2,1,myw), at(2,2,dec),
-            divider,
-            at(4,"1 / span 2",rem),
-            at(5,1,sta),
-            at(6,1,fnd), at(6,2,sup),
-            at(7,1,enc));
-          // iPad landscape / Mac: games in two columns at the top; below the line, the show options on the
-          // left, FIND and SUPER FIND beside them, ENCRYPT under the show options
-          return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"auto auto 1fr",columnGap:vw<760?12:30,rowGap:g,alignItems:"center"}},
-            at(1,1,sol), at(1,2,dly),
-            at(2,1,myw), at(2,2,dec),
-            divider,
-            at(4,1,rem), at(4,2,fnd),
-            at(5,1,sta), at(5,2,sup),
-            at(6,1,enc)
-          );
+            line(3),
+            at(4,"1 / -1",rem),
+            at(5,1,sup), at(5,2,enc),
+            line(6),
+            at(7,"1 / -1",fnd));
         })()
       )
     ),
@@ -969,6 +1010,10 @@ function App() {
               : line.items.map((t,j)=>React.createElement("span",{key:j,style:{whiteSpace:"nowrap",color:t.dim?"#7c7c7e":"#e0e0e0"}},
                   t.word.toUpperCase())))   // dimmed = can't be the answer (shown only when it's safer or faster)
           );
+        }
+        if (line && line.type==="result") {   // end-of-game line; a small red check if the game was peeked at
+          return React.createElement("div",{key:i,style:{color:"#b8b8b8"}}, line.text,
+            line.peeked && React.createElement("span",{title:"Remaining words or Super find were used",style:{color:"#d9534f",fontSize:"0.7em",marginLeft:"0.6ch",verticalAlign:"middle"}},"✓"));
         }
         if (line && line.type==="stats") {
           // "N remaining" at the left edge, then the letter counts indented on their own line
@@ -1006,7 +1051,7 @@ function App() {
         }
         return React.createElement("div",{key:i,style:{
           color: line.startsWith("─")?"#538d4e":
-                 (line.startsWith("Find:")||line.startsWith("FIND,")||line.startsWith("SUPER FIND"))?"#378ADD":
+                 (line.startsWith("Find:")||line.startsWith("FIND,")||line.startsWith("SUPER FIND")||line===FINDER_NOTE)?"#378ADD":
                  (line.startsWith("ENCRYPT:")||line.startsWith("DECRYPT:"))?"#c9b458":
                  (line.startsWith("My Word:")||line.startsWith("MY WORD:")||line.startsWith("Note: MYWORD"))?"#c9b458":
                  line.startsWith("Guess:")?"#e0e0e0":
@@ -1045,13 +1090,15 @@ function App() {
 ReactDOM.render(React.createElement(App), document.getElementById("wordle-root"));
 </script>
 <!-- Home button (captcraig.net) -->
-<a href="/" id="cc-home" aria-label="Back to home page">⌂ Home</a>
+<a href="/" id="cc-home" aria-label="Back to home page">⌂<span class="cc-home-word"> Home</span></a>
 <style>
-#cc-home{position:absolute;top:calc(16px + env(safe-area-inset-top));left:calc(14px + env(safe-area-inset-left));
+#cc-home{position:absolute;top:calc(3px + env(safe-area-inset-top));left:calc(10px + env(safe-area-inset-left));
 z-index:9999;padding:5px 12px;border-radius:999px;font:600 14px/1.2 system-ui,-apple-system,sans-serif;
 text-decoration:none;color:#ddd;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);
 opacity:.75;transition:opacity .15s,background .15s}
 #cc-home:hover,#cc-home:focus-visible{opacity:1;background:rgba(255,255,255,.22)}
+/* sits in the title bar, clear of the board; phones get just the house, so it clears the title too */
+@media (max-width:599px){#cc-home{padding:2px 7px;left:calc(6px + env(safe-area-inset-left))}.cc-home-word{display:none}}
 </style>
 </body>
 </html>
