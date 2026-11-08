@@ -288,6 +288,12 @@ function computeLetterStates(guesses, answer) {
 // The answer list for the current game. If the answer isn't on the list -- a Myword word, a decrypted
 // code, or a Daily word NYT picked from outside it -- it joins the list for this game only, so the
 // remaining words, the stats and Super find always include it.
+// Picking a different game: Show remaining words turns off, so every game you pick starts clean
+// (it stays on from round to round within the same game)
+function switchGame(game){
+  if (state.game!==game) state.showRemaining=false;
+  state.game=game;
+}
 function answerPool(){
   return (state.answer && state.game!=="solitaire" && !ANSWER_SET.has(state.answer)) ? [...ANSWERS, state.answer].sort() : ANSWERS;
 }
@@ -635,7 +641,7 @@ function App() {
       const plain=decryptWord(w);
       if (!VALID_GUESSES.includes(plain)) { setLog(prev=>[...prev.slice(0,-1), introLine("DECRYPT: "+w.toUpperCase()+" ✗ not a valid code"), "DECRYPT: "]); cryptRef.current=""; rerender(); return; }
       // valid code: its word secretly becomes the answer of a fresh Solitaire puzzle
-      state.game="decrypt"; state.decryptCode=w; initGame(); setFlipping({});
+      switchGame("decrypt"); state.decryptCode=w; initGame(); setFlipping({});
       cryptRef.current=""; setKbMode("guess");
       setLog(prev=>[...prev.slice(0,-1), introLine("DECRYPT: "+w.toUpperCase()+" ✓"), "Guess: "].slice(-MAX_LOG_LINES));
       rerender(); return;
@@ -654,7 +660,7 @@ function App() {
         rerender(); return;
       }
       state.myWord=w;
-      state.game="myword";
+      switchGame("myword");
       myWordRef.current="";
       setKbMode("guess");
       initGame(); setFlipping({});
@@ -902,7 +908,7 @@ function App() {
     return ()=>document.removeEventListener("visibilitychange", check);
   },[]);
   const enterDaily = (code, date)=>{
-    state.game="daily"; state.dailyWord=decryptWord(code);
+    switchGame("daily"); state.dailyWord=decryptWord(code);
     if (!VALID_GUESSES.includes(state.dailyWord)) VALID_GUESSES.push(state.dailyWord);   // NYT's word is always playable
     state.dailyCode=code; state.dailyDate=date; initGame();
     setFlipping({});
@@ -955,7 +961,7 @@ function App() {
   const startSolitaire = ()=>{
     if (kbMode==="find") endFind();
     myWordRef.current=""; cryptRef.current="";
-    state.game="solitaire"; initGame(); setFlipping({}); setKbMode("guess");
+    switchGame("solitaire"); initGame(); setFlipping({}); setKbMode("guess");
     setLog(prev=>startLog(prev,[]));       // the prompt (or a half-typed entry) is replaced too
     rerender();
   };
@@ -977,7 +983,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.037":"WORDLE SOLITAIRE v.037",
+        state.game==="myword"?"WORDLE MY WORD v.038":"WORDLE SOLITAIRE v.038",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
