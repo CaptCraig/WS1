@@ -353,25 +353,39 @@ const tagNow = (tag)=>({tag, gen:state.guesses.length, round:state.round});
 const tagged = (lines, t)=>lines.map(l=> typeof l==="string" ? {type:"text", text:l, ...t} : {...l, ...t});
 const isHere = (l, tag)=> l && l.tag===tag && l.gen===state.guesses.length && l.round===state.round;
 const FINDER_NOTE = "Note: Most serious Wordle players keep a word finder handy. You still pick the guess; the computer just does the lookup.";
-const gameBanner = ()=>({type:"text", intro:true, banner:true,
-  text: state.game==="daily" ? `─── Daily · ${state.dailyDate} ───` : `─── ${({solitaire:"Solitaire", myword:"My Word", decrypt:"Decrypt"})[state.game]} ───`});
+const gameBanner = (game=state.game)=>({type:"text", intro:true, banner:true,
+  text: game==="daily" ? `─── Daily · ${state.dailyDate} ───` : `─── ${({solitaire:"Solitaire", myword:"My Word", decrypt:"Decrypt"})[game]} ───`});
 const introLine = (text)=>({type:"text", intro:true, text});
 // A game is starting: replace the prompt with its banner (and any intro lines) plus a fresh prompt.
 // If the game before it never got a guess, that game's intro -- its banner, notes, and anything shown
 // before a guess -- is taken out first, so switching games doesn't leave a trail.
-function startLog(prev, lines){
-  let L = prev.slice(0,-1);
+function dropIntro(L){
   let b = -1;
   for (let i=L.length-1; i>=0; i--) {
     const l=L[i];
     if (l && l.type==="tiles") break;          // that game had a guess: keep it all
     if (l && l.banner) { b=i; break; }
   }
-  if (b>=0) {
-    while (b>0 && L[b-1] && L[b-1].intro && !L[b-1].banner) b--;
-    L = L.slice(0,b);
-  }
-  return [...L, ...lines, gameBanner(), "Guess: "].slice(-MAX_LOG_LINES);
+  if (b<0) return L;
+  while (b>0 && L[b-1] && L[b-1].intro && !L[b-1].banner) b--;
+  return L.slice(0,b);
+}
+// does the log already show the current game, i.e. its banner or its guesses since the last banner?
+function showsGame(L){
+  for (let i=L.length-1; i>=0; i--) { const l=L[i]; if (l && (l.type==="tiles"||l.banner)) return true; if (l && l.type==="text" && !l.intro && !l.tag) return false; if (typeof l==="string" && l.startsWith("─────")) return false; }
+  return false;
+}
+function startLog(prev, lines){
+  return [...dropIntro(prev.slice(0,-1)), gameBanner(), ...lines, "Guess: "].slice(-MAX_LOG_LINES);
+}
+// Myword / Decrypt: the banner goes up the moment the button is tapped, above the entry prompt
+function entryLog(prev, game, lines, prompt){
+  return [...dropIntro(prev.slice(0,-1)), gameBanner(game), ...lines, prompt].slice(-MAX_LOG_LINES);
+}
+// Backing out of a Myword / Decrypt entry: its banner goes, and the game you were in comes back
+function cancelEntryLog(prev){
+  const L = dropIntro(prev.slice(0,-1));
+  return [...L, ...(showsGame(L)?[]:[gameBanner()]), "Guess: "+state.current].slice(-MAX_LOG_LINES);
 }
 
 const modeSelector = { open:false };
@@ -604,7 +618,11 @@ function App() {
   const myWordNoteRef = useRef(false);
   const finderNoteRef = useRef(false);
   const cryptPrompt = (mode)=>(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ")+cryptRef.current.toUpperCase();
-  const leaveCrypt = ()=>{ cryptRef.current=""; setKbMode("guess"); updateLastLog("Guess: "+state.current); };
+  const leaveCrypt = ()=>{
+    const wasDecrypt = kbMode==="decrypt";
+    cryptRef.current=""; setKbMode("guess");
+    if (wasDecrypt) setLog(prev=>cancelEntryLog(prev)); else updateLastLog("Guess: "+state.current);
+  };
   const processCryptKey = useCallback((key, mode)=>{
     if (key==="Enter") {
       const w=cryptRef.current;
@@ -615,11 +633,11 @@ function App() {
         cryptRef.current=""; addLog("ENCRYPT: "); rerender(); return;      // ready for the next word
       }
       const plain=decryptWord(w);
-      if (!VALID_GUESSES.includes(plain)) { updateLastLog("DECRYPT: "+w.toUpperCase()+" ✗ not a valid code"); cryptRef.current=""; addLog("DECRYPT: "); rerender(); return; }
+      if (!VALID_GUESSES.includes(plain)) { setLog(prev=>[...prev.slice(0,-1), introLine("DECRYPT: "+w.toUpperCase()+" ✗ not a valid code"), "DECRYPT: "]); cryptRef.current=""; rerender(); return; }
       // valid code: its word secretly becomes the answer of a fresh Solitaire puzzle
       state.game="decrypt"; state.decryptCode=w; initGame(); setFlipping({});
       cryptRef.current=""; setKbMode("guess");
-      setLog(prev=>startLog(prev,[introLine("DECRYPT: "+w.toUpperCase()+" ✓")]));
+      setLog(prev=>[...prev.slice(0,-1), introLine("DECRYPT: "+w.toUpperCase()+" ✓"), "Guess: "].slice(-MAX_LOG_LINES));
       rerender(); return;
     }
     if (key==="Backspace") { cryptRef.current=cryptRef.current.slice(0,-1); updateLastLog(cryptPrompt(mode)); rerender(); return; }
@@ -629,12 +647,18 @@ function App() {
   const processMyWordKey = useCallback((key)=>{
     if (key==="Enter") {
       if (myWordRef.current.length!==5) return;
-      state.myWord=myWordRef.current.toLowerCase();
+      const w=myWordRef.current.toLowerCase();
+      if (!VALID_GUESSES.includes(w)) {         // must be a word you could type as a guess, or the game can't be won
+        myWordRef.current="";
+        setLog(prev=>[...prev.slice(0,-1), introLine("MY WORD: "+w.toUpperCase()+" ✗ not in word list"), "MY WORD: "].slice(-MAX_LOG_LINES));
+        rerender(); return;
+      }
+      state.myWord=w;
       state.game="myword";
       myWordRef.current="";
       setKbMode("guess");
       initGame(); setFlipping({});
-      setLog(prev=>startLog(prev,[introLine("MY WORD: "+state.myWord.toUpperCase()+" ✓")]));
+      setLog(prev=>[...prev.slice(0,-1), introLine("MY WORD: "+state.myWord.toUpperCase()+" ✓"), "Guess: "].slice(-MAX_LOG_LINES));
       rerender(); return;
     }
     if (key==="Backspace"){ 
@@ -670,7 +694,7 @@ function App() {
       if(key==="Escape"){
         if(kbMode==="encrypt"||kbMode==="decrypt"){ leaveCrypt(); rerender(); return; }
         if(kbMode==="find") updateLastLog("Guess: "+state.current);
-        if(kbMode==="myword") updateLastLog("Guess: "+state.current);
+        if(kbMode==="myword") setLog(prev=>cancelEntryLog(prev));
         endFind(); myWordRef.current=""; rerender(); return; }
       if(kbMode==="encrypt"||kbMode==="decrypt") processCryptKey(key,kbMode);
       else if(kbMode==="find") processFindKey(key);
@@ -783,8 +807,10 @@ function App() {
   const leaveEntry = ()=>{
     if (kbMode==="guess") return;
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
+    const wasGameEntry = kbMode==="myword" || kbMode==="decrypt";
     cryptRef.current=""; myWordRef.current="";
-    setKbMode("guess"); updateLastLog("Guess: "+state.current);
+    setKbMode("guess");
+    if (wasGameEntry) setLog(prev=>cancelEntryLog(prev)); else updateLastLog("Guess: "+state.current);
   };
   // FIND: tap to type letters (the prompt replaces the Guess line); tap while typing to cancel.
   // When it has shown its words it goes off, ready for a guess.
@@ -827,8 +853,11 @@ function App() {
     if (kbMode===mode) { leaveCrypt(); rerender(); return; }
     if (kbMode==="find"||kbMode==="myword") { findRef.current=""; excludeRef.current=""; findPhaseRef.current="include"; myWordRef.current=""; }
     if (mode==="encrypt") keepSuper();
+    const backingOut = mode==="encrypt" && (kbMode==="myword"||kbMode==="decrypt");
     cryptRef.current=""; setKbMode(mode);
-    updateLastLog(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ");
+    if (mode==="decrypt") setLog(prev=>entryLog(prev,"decrypt",[],"DECRYPT: "));
+    else if (backingOut) setLog(prev=>{ const c=cancelEntryLog(prev); return [...c.slice(0,-1),"ENCRYPT: "]; });
+    else updateLastLog("ENCRYPT: ");
     rerender();
   };
   // DAILY: fetch the day's word (encrypted, in daily.json) and quietly start it as the answer.
@@ -918,10 +947,9 @@ function App() {
     if (kbMode==="find") endFind();
     if (kbMode==="encrypt"||kbMode==="decrypt") cryptRef.current="";
     myWordRef.current=""; setKbMode("myword");
-    if (!myWordNoteRef.current) {             // first time only
-      myWordNoteRef.current=true;
-      setLog(prev=>[...prev.slice(0,-1), introLine("Note: MYWORD keeps the same word for every game until you pick another game."), "MY WORD: "].slice(-MAX_LOG_LINES));
-    } else updateLastLog("MY WORD: ");
+    const note = myWordNoteRef.current ? [] : [introLine("Note: MYWORD keeps the same word for every game until you pick another game.")];   // first time only
+    myWordNoteRef.current=true;
+    setLog(prev=>entryLog(prev,"myword",note,"MY WORD: "));
     rerender();
   };
   const startSolitaire = ()=>{
@@ -949,7 +977,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.036":"WORDLE SOLITAIRE v.036",
+        state.game==="myword"?"WORDLE MY WORD v.037":"WORDLE SOLITAIRE v.037",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
