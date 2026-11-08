@@ -358,7 +358,12 @@ initGame();
 const tagNow = (tag)=>({tag, gen:state.guesses.length, round:state.round});
 const tagged = (lines, t)=>lines.map(l=> typeof l==="string" ? {type:"text", text:l, ...t} : {...l, ...t});
 const isHere = (l, tag)=> l && l.tag===tag && l.gen===state.guesses.length && l.round===state.round;
-const FINDER_NOTE = "Note: Most serious Wordle players keep a word finder handy. You still pick the guess; the computer just does the lookup.";
+const FINDER_NOTE = "Note: Most serious Wordle players keep a word finder handy. Ours doesn't know the answer; it simply searches all five-letter words.";
+// The finder note shows once a day (per browser): the date it last showed is kept in local storage
+const FINDER_NOTE_KEY = "ws1-finder-note-day";
+const todayLocal = ()=>new Intl.DateTimeFormat("en-CA").format(new Date());   // YYYY-MM-DD
+function finderNoteDue(){ try { return localStorage.getItem(FINDER_NOTE_KEY)!==todayLocal(); } catch(e){ return true; } }
+function finderNoteShown(){ try { localStorage.setItem(FINDER_NOTE_KEY, todayLocal()); } catch(e){} }
 const gameBanner = (game=state.game)=>({type:"text", intro:true, banner:true,
   text: game==="daily" ? `─── Daily · ${state.dailyDate} ───` : `─── ${({solitaire:"Solitaire", myword:"My Word", decrypt:"Decrypt"})[game]} ───`});
 const introLine = (text)=>({type:"text", intro:true, text});
@@ -622,7 +627,7 @@ function App() {
   // ENCRYPT / DECRYPT entry (prompt replaces the Guess line, like FIND)
   const cryptRef = useRef("");
   const myWordNoteRef = useRef(false);
-  const finderNoteRef = useRef(false);
+  const finderNoteRef = useRef(false);   // also once per page load, in case storage isn't available
   const cryptPrompt = (mode)=>(mode==="encrypt"?"ENCRYPT: ":"DECRYPT: ")+cryptRef.current.toUpperCase();
   const leaveCrypt = ()=>{
     const wasDecrypt = kbMode==="decrypt";
@@ -825,8 +830,8 @@ function App() {
     leaveEntry(); keepSuper();
     findRef.current=""; excludeRef.current=""; findPhaseRef.current="include";
     setKbMode("find");
-    if (!finderNoteRef.current) {             // first time only
-      finderNoteRef.current=true;
+    if (!finderNoteRef.current && finderNoteDue()) {   // once a day
+      finderNoteRef.current=true; finderNoteShown();
       setLog(prev=>[...prev.slice(0,-1), FINDER_NOTE, "FIND, INCLUDE: "].slice(-MAX_LOG_LINES));
     } else updateLastLog("FIND, INCLUDE: ");
     rerender();
@@ -983,7 +988,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.038":"WORDLE SOLITAIRE v.038",
+        state.game==="myword"?"WORDLE MY WORD v.039":"WORDLE SOLITAIRE v.039",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
