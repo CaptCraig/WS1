@@ -988,7 +988,7 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.039":"WORDLE SOLITAIRE v.039",
+        state.game==="myword"?"WORDLE MY WORD v.040":"WORDLE SOLITAIRE v.040",
         devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
@@ -1161,5 +1161,7 @@ opacity:.75;transition:opacity .15s,background .15s}
 /* sits in the title bar, clear of the board; phones get just the house, so it clears the title too */
 @media (max-width:599px){#cc-home{padding:2px 7px;left:calc(6px + env(safe-area-inset-left))}.cc-home-word{display:none}}
 </style>
+<!-- Visit counter (GoatCounter: no cookies, no personal data; localhost is not counted) -->
+<script data-goatcounter="https://captcraig.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>
