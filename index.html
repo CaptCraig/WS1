@@ -404,6 +404,8 @@ const myWordEntry = { open:false, letters:"" };
 
 const { useState, useEffect, useLayoutEffect, useCallback, useRef } = React;
 
+// Version: no longer in the title; shown only next to DEV in developer mode
+const APP_VERSION = "v.041";
 const MAX_LOG_LINES = 314;
 const TILE_COLORS = { correct:"#538d4e", present:"#b59f3b", absent:"#3a3a3c" };
 const DEV_SEQUENCE = "vwxyz";
@@ -476,6 +478,10 @@ function App() {
   },[]);
 
   const processGameKey = useCallback((key)=>{
+    if (state.gameOver && state.pendingNew && state.game==="decrypt" && /^[a-z]$/.test(key)) {
+      // a finished Decrypt game that left its code prompt (Find, Super find...): typing goes back to asking for a code
+      cryptRef.current=key; setKbMode("decrypt"); updateLastLog("DECRYPT: "+key.toUpperCase()); rerender(); return;
+    }
     if (state.gameOver && state.pendingNew && /^[a-z]$/.test(key)) {
       // First letter of the next puzzle: now clear the board and start it
       initGame(); setFlipping({});
@@ -530,7 +536,7 @@ function App() {
           state.showNewGame=true;
           const summary=["","─── Game Summary ───",
             ...state.guesses.map(g=>{ const tr=tileRow(g,state.answer); tr.prefix="  "; tr.suffix=""; return tr; }),
-            {type:"result", peeked:state.peeked, text: isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}!`
+            {type:"result", peeked:state.peeked, text: isWin?`Solved in ${state.guesses.length} guess${state.guesses.length!==1?"es":""}`
                  :(state.game==="decrypt"?`Sorry, the decrypted word was ${state.answer.toUpperCase()}.`
                    :state.game==="daily"?`Sorry, today's daily word was ${state.answer.toUpperCase()}.`
                    :`The word was ${state.answer.toUpperCase()}`)},
@@ -541,7 +547,11 @@ function App() {
           // Prompt for the next puzzle, but leave the finished board showing
           // until the player types a letter or presses SOLITAIRE
           state.pendingNew=true;
-          addLog([...summary,gameBanner(),"Guess: "]);
+          if (state.game==="decrypt") {
+            // Decrypt: ask for the next code to solve (the old code isn't played again)
+            cryptRef.current=""; setKbMode("decrypt");
+            addLog([...summary,gameBanner(),"DECRYPT: "]);
+          } else addLog([...summary,gameBanner(),"Guess: "]);
           rerender();
         },1800);
       } else {
@@ -988,8 +998,8 @@ function App() {
     // Header — half padding
     React.createElement("div",{style:{borderBottom:"1px solid #3a3a3c",padding:"5px 12px",flexShrink:0,textAlign:"center"}},
       React.createElement("span",{style:{fontSize:17,fontWeight:800,letterSpacing:3}},
-        state.game==="myword"?"WORDLE MY WORD v.040":"WORDLE SOLITAIRE v.040",
-        devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV")
+        state.game==="myword"?"WORDLE MY WORD":"WORDLE SOLITAIRE",
+        devMode&&React.createElement("span",{style:{fontSize:9,color:"#b59f3b",marginLeft:6,letterSpacing:1}},"DEV "+APP_VERSION)
       ),
       newVersion&&React.createElement("button",{onPointerDown:(e)=>{e.preventDefault();location.reload();},
         style:{marginLeft:10,verticalAlign:"middle",fontSize:10,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",color:"#121213",background:"#c9b458",border:0,borderRadius:4,padding:"3px 7px",cursor:"pointer"}},
@@ -1158,8 +1168,9 @@ z-index:9999;padding:5px 12px;border-radius:999px;font:600 14px/1.2 system-ui,-a
 text-decoration:none;color:#ddd;background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.28);
 opacity:.75;transition:opacity .15s,background .15s}
 #cc-home:hover,#cc-home:focus-visible{opacity:1;background:rgba(255,255,255,.22)}
-/* sits in the title bar, clear of the board; phones get just the house, so it clears the title too */
-@media (max-width:599px){#cc-home{padding:2px 7px;left:calc(6px + env(safe-area-inset-left))}.cc-home-word{display:none}}
+/* sits in the title bar, clear of the board; phones get a smaller button so "Home" clears the title */
+@media (max-width:599px){#cc-home{padding:2px 7px;font-size:13px;left:calc(6px + env(safe-area-inset-left))}}
+@media (max-width:359px){.cc-home-word{display:none}}   /* the smallest phones: just the house, as before */
 </style>
 <!-- Visit counter (GoatCounter: no cookies, no personal data; localhost is not counted) -->
 <script data-goatcounter="https://captcraig.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
